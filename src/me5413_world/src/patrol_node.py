@@ -18,7 +18,6 @@ patrol_node.py
 
 import math
 import rospy
-from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, Int16
 from gazebo_msgs.srv import SetModelState
 from gazebo_msgs.msg import ModelState
@@ -41,11 +40,9 @@ WAYPOINTS = [
 ]
 
 # ── 运动参数 ─────────────────────────────────────────────────────────
-ANGULAR_SPEED  = 0.4   # rad/s 原地旋转速度
-SCAN_STEP_DEG  = 9     # 每步旋转角度（°）—— 分辨率
+SCAN_STEP_DEG  = 9     # 每步旋转角度（°）
 SCAN_TOTAL_DEG = 90    # 每个检查点扫描总角度（°）
 SCAN_STEPS     = SCAN_TOTAL_DEG // SCAN_STEP_DEG   # = 10 步
-STOP_WAIT      = 0.5   # 旋转一步后静止等待时间（秒）
 SCAN_TIMEOUT   = 5.0   # 等待 scan_done 的超时时间（秒）
 
 # ────────────────────────────────────────────────────────────────────
@@ -55,7 +52,6 @@ class PatrolNode:
     def __init__(self):
         rospy.init_node('patrol_node')
 
-        self.pub_cmd_vel = rospy.Publisher('/cmd_vel',                   Twist, queue_size=1)
         self.pub_trigger = rospy.Publisher('/me5413/scan_trigger',       Bool,  queue_size=1)
         self.pub_unblock = rospy.Publisher('/cmd_unblock',               Bool,  queue_size=1)
         self.pub_respawn = rospy.Publisher('/rviz_panel/respawn_objects', Int16, queue_size=1)
@@ -65,6 +61,11 @@ class PatrolNode:
 
         rospy.wait_for_service('/gazebo/set_model_state', timeout=10.0)
         self._set_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+
+        # 当前传送位置，供旋转步骤使用
+        self._cur_x   = 0.0
+        self._cur_y   = 0.0
+        self._cur_yaw = 0.0   # 度
 
         rospy.loginfo("PatrolNode 启动，3秒后开始...")
         rospy.sleep(3.0)
@@ -78,47 +79,37 @@ class PatrolNode:
     # ── 传送 ────────────────────────────────────────────────────────
 
     def _teleport(self, x, y, yaw_deg):
-        """直接传送小车到指定位置，不依赖任何定位。"""
+        """直接传送小车到指定位置+朝向，不依赖任何定位。"""
+        self._cur_x   = x
+        self._cur_y   = y
+        self._cur_yaw = yaw_deg
         yaw = math.radians(yaw_deg)
         state = ModelState()
-        state.model_name        = 'jackal'
-        state.reference_frame   = 'world'
-        state.pose.position.x   = x
-        state.pose.position.y   = y
-        state.pose.position.z   = 0.1
+        state.model_name         = 'jackal'
+        state.reference_frame    = 'world'
+        state.pose.position.x    = x
+        state.pose.position.y    = y
+        state.pose.position.z    = 0.1
         state.pose.orientation.z = math.sin(yaw / 2)
         state.pose.orientation.w = math.cos(yaw / 2)
         try:
             self._set_state(state)
-            rospy.sleep(1.0)   # 等物理引擎稳定
+            rospy.sleep(0.8)   # 等物理引擎稳定
         except Exception as e:
             rospy.logwarn("传送失败: %s", e)
 
     # ── 运动原语 ────────────────────────────────────────────────────
 
-    def _stop(self):
-        self.pub_cmd_vel.publish(Twist())
-        rospy.sleep(STOP_WAIT)
-
     def _rotate_step(self):
-        """旋转一步（SCAN_STEP_DEG°），停稳后触发OCR，等待完成。"""
-        angle    = math.radians(SCAN_STEP_DEG)
-        duration = angle / ANGULAR_SPEED
+        """传送到下一个角度（不用 cmd_vel），触发识别，等待完成。"""
+        self._cur_yaw += SCAN_STEP_DEG
+        self._teleport(self._cur_x, self._cur_y, self._cur_yaw)
 
-        msg = Twist()
-        msg.angular.z = ANGULAR_SPEED
-        end  = rospy.Time.now() + rospy.Duration(duration)
-        rate = rospy.Rate(20)
-        while rospy.Time.now() < end and not rospy.is_shutdown():
-            self.pub_cmd_vel.publish(msg)
-            rate.sleep()
-        self._stop()
-
-        # 触发 box_counter 识别当前帧
+        # 触发识别当前帧
         self.scan_done = False
         self.pub_trigger.publish(Bool(data=True))
 
-        # 等待 box_counter 完成
+        # 等待完成
         timeout = rospy.Time.now() + rospy.Duration(SCAN_TIMEOUT)
         rate    = rospy.Rate(10)
         while not self.scan_done and rospy.Time.now() < timeout:

@@ -57,3 +57,16 @@ CATKIN_IGNORE
 
 # Large rosbag files (shared via other means)
 *.bag
+
+# YOLO training dataset (large, generated locally)
+src/me5413_dataset/
+
+# YOLO training runs output
+runs/
+
+# Misc generated files
+frames.gv
+frames.pdf
+
+# Model
+*.pt

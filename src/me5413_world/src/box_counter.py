@@ -2,7 +2,7 @@
 """
 box_counter.py
 
-订阅相机图像和 Velodyne 3D 点云，用 EasyOCR 识别箱子数字，
+订阅相机图像和 Velodyne 3D 点云，用 YOLOv8 识别箱子数字，
 将检测结果定位到世界坐标并做去重计数。
 
 深度来源：/mid/points（Velodyne 16线点云），按水平角索引，
@@ -11,7 +11,7 @@ box_counter.py
 发布:
   /me5413/box_count    (std_msgs/String)      JSON格式计数结果
   /me5413/box_markers  (visualization_msgs/MarkerArray)  RViz可视化
-  /me5413/debug_image  (sensor_msgs/Image)    标注图：OCR框+距离+状态
+  /me5413/debug_image  (sensor_msgs/Image)    标注图：YOLO框+距离+状态
 
 位置计算模式（~use_ground_truth 参数）：
   False（默认）: TF链 velodyne→map，正式运行时用
@@ -20,6 +20,7 @@ box_counter.py
 
 import math
 import json
+import os
 
 import rospy
 import tf2_ros
@@ -27,6 +28,7 @@ import tf2_geometry_msgs  # 注册 PointStamped TF 变换支持，必须保留
 import cv2
 import numpy as np
 from cv_bridge import CvBridge
+from ultralytics import YOLO
 
 import sensor_msgs.point_cloud2 as pc2
 from sensor_msgs.msg import Image, PointCloud2
@@ -35,10 +37,7 @@ from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker, MarkerArray
 
-import easyocr
-
-READER = easyocr.Reader(['en'], gpu=False, verbose=False)
-VALID_DIGITS = {'1', '2', '3', '4', '5', '6', '7', '8', '9'}
+_DEFAULT_MODEL = os.path.join(os.path.dirname(__file__), '..', 'models', 'box_detector.pt')
 
 COLOR_NEW   = (0, 220, 0)
 COLOR_DUP   = (0, 200, 255)
@@ -57,9 +56,11 @@ class BoxCounter:
         self.image_topic      = rospy.get_param('~image_topic',       '/front/image_raw')
         self.map_frame        = rospy.get_param('~map_frame',         'map')
         self.dedup_dist       = rospy.get_param('~dedup_dist',        1.5)
-        self.min_conf         = rospy.get_param('~min_conf',          0.5)
-        self.same_frame_px    = rospy.get_param('~same_frame_px',     150)
+        self.min_conf         = rospy.get_param('~min_conf',          0.4)
         self.use_ground_truth = rospy.get_param('~use_ground_truth',  False)
+        model_path = rospy.get_param('~model_path', _DEFAULT_MODEL)
+        self._yolo = YOLO(model_path)
+        rospy.loginfo("YOLO 模型已加载: %s", model_path)
 
         # 相机内参
         self.image_width = 640
@@ -215,41 +216,26 @@ class BoxCounter:
         self._publish_debug_image(cv_img, annotations)
         self.pub_done.publish(Bool(data=True))
 
-    # ── OCR ──────────────────────────────────────────────
+    # ── YOLO 检测 ─────────────────────────────────────────
 
     def _detect_digits(self, cv_img):
-        gray     = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-        enhanced = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        raw = []
-        for img_var in (enhanced, gray, binary):
-            for (bbox, text, conf) in READER.readtext(
-                    img_var, allowlist='123456789',
-                    min_size=15, text_threshold=self.min_conf - 0.1):
-                text = text.strip()
-                if text not in VALID_DIGITS:
-                    continue
-                xs = [p[0] for p in bbox]
-                ys = [p[1] for p in bbox]
-                raw.append((text, int(sum(xs)/4), int(sum(ys)/4), bbox, conf))
-
-        # 去重：相同数字且像素距离近，保留置信度最高
-        merged, used = [], [False] * len(raw)
-        for i, (d1, cx1, cy1, b1, c1) in enumerate(raw):
-            if used[i]:
-                continue
-            best = (d1, cx1, cy1, b1, c1)
-            for j, (d2, cx2, cy2, b2, c2) in enumerate(raw):
-                if i == j or used[j]:
-                    continue
-                if d1 == d2 and math.hypot(cx1-cx2, cy1-cy2) < self.same_frame_px:
-                    used[j] = True
-                    if c2 > best[4]:
-                        best = (d2, cx2, cy2, b2, c2)
-            used[i] = True
-            merged.append(best)
-        return merged
+        """
+        用 YOLOv8 检测箱子，返回与原 EasyOCR 接口相同的列表：
+          [(digit_str, cx_px, cy_px, bbox_polygon, conf), ...]
+        bbox_polygon 为顺时针四点列表，与 _publish_debug_image 兼容。
+        """
+        results = self._yolo(cv_img, conf=self.min_conf, verbose=False)[0]
+        detections = []
+        for box in results.boxes:
+            cls  = int(box.cls[0])
+            conf = float(box.conf[0])
+            digit = str(cls + 1)          # class 0→'1', class 8→'9'
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            bbox = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+            detections.append((digit, cx, cy, bbox, conf))
+        return detections
 
     # ── 像素 → 世界坐标（Velodyne 点云版） ───────────────
 
