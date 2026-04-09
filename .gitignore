@@ -55,8 +55,10 @@ CATKIN_IGNORE
 
 项目进度和状态.pdf
 
-# Large rosbag files (shared via other means)
+# Large files (shared via other means)
 *.bag
+*.pcd
+*.pt
 
 # YOLO training dataset (large, generated locally)
 src/me5413_dataset/
@@ -67,6 +69,3 @@ runs/
 # Misc generated files
 frames.gv
 frames.pdf
-
-# Model
-*.pt

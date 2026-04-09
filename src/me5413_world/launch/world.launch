@@ -29,4 +29,12 @@
     <!-- Load the destination configuration -->
     <rosparam command="load" file="$(find me5413_world)/config/config.yaml" />
 
+    <!-- Feature cylinders for hdl_localization NDT (added by Brandon) -->
+    <node name="spawn_cylinder_1" pkg="gazebo_ros" type="spawn_model" output="screen"
+            args="-sdf -file $(find me5413_world)/models/cylinder/model.sdf -model cylinder_1 -x -2 -y -10 -z 0.5 -R 0 -P 0 -Y 0" />
+    <node name="spawn_cylinder_2" pkg="gazebo_ros" type="spawn_model" output="screen"
+            args="-sdf -file $(find me5413_world)/models/cylinder/model.sdf -model cylinder_2 -x 18 -y -4.66 -z 3 -R 0 -P 0 -Y 0" />
+    <node name="spawn_cylinder_3" pkg="gazebo_ros" type="spawn_model" output="screen"
+            args="-sdf -file $(find me5413_world)/models/cylinder/model.sdf -model cylinder_3 -x 20 -y 3.9 -z 3 -R 0 -P 0 -Y 0" />
+
 </launch>

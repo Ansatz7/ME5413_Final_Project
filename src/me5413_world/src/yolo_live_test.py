@@ -22,7 +22,7 @@ class YoloLiveTest:
     def __init__(self):
         rospy.init_node('yolo_live_test')
         model_path = rospy.get_param('~model_path', _DEFAULT_MODEL)
-        self.conf  = rospy.get_param('~conf', 0.3)
+        self.conf  = rospy.get_param('~conf', 0.9)
         self.model = YOLO(model_path)
         self.bridge = CvBridge()
 

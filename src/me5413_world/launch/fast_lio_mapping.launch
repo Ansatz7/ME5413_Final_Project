@@ -1,0 +1,9 @@
+<launch>
+
+  <node name="teleop_twist_keyboard" pkg="teleop_twist_keyboard" type="teleop_twist_keyboard.py" output="screen" respawn="true"/>
+  
+  <include file="$(find fast_lio)/launch/mapping_velodyne.launch" />
+
+  <node pkg="tf2_ros" type="static_transform_publisher" name="fastlio_to_map" args="0 0 0 0 0 0 map camera_init" />
+
+  </launch>
