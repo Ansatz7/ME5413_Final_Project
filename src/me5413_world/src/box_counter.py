@@ -73,6 +73,8 @@ class BoxCounter:
         # continuous_hz > 0 时启用定时器，每隔 move_dist_min 米触发一次
         self.continuous_hz    = rospy.get_param('~continuous_hz',     0.0)
         self.move_dist_min    = rospy.get_param('~move_dist_min',     0.3)
+        # 独立显示定时器：与计数逻辑解耦，只做 YOLO画框+发图，不影响候选池
+        self.display_hz       = rospy.get_param('~display_hz',        5.0)
         # 多观测确认：同一位置至少观测 min_obs 次且来自 min_obs_dist 米外的不同位置才计入
         self.min_obs          = rospy.get_param('~min_obs',           2)
         self.min_obs_dist     = rospy.get_param('~min_obs_dist',      0.4)
@@ -158,6 +160,10 @@ class BoxCounter:
                           self.min_obs, self.min_obs_dist)
         else:
             rospy.loginfo("等待 /me5413/scan_trigger 触发信号...")
+
+        if self.display_hz > 0:
+            rospy.Timer(rospy.Duration(1.0 / self.display_hz), self._display_cb)
+            rospy.loginfo("独立显示定时器启动：%.1f Hz（与计数逻辑解耦）", self.display_hz)
 
     # ── 回调 ─────────────────────────────────────────────
 
@@ -373,8 +379,8 @@ class BoxCounter:
 
     def _run_detection(self, robot_pos):
         """
-        核心检测逻辑：处理当前图像帧，将结果加入多观测候选池并发布调试图。
-        robot_pos: (rx, ry) in map frame，连续模式下提供，可为 None（跳过多观测距离校验）。
+        计数逻辑：移动足够时触发，更新候选池/confirmed列表。
+        不再负责发布 debug image（由独立的 _display_cb 处理）。
         """
         if self.latest_image is None or self._last_cloud_time is None:
             return
@@ -384,36 +390,61 @@ class BoxCounter:
             rospy.logwarn("图像转换失败: %s", e)
             return
 
-        detections  = self._detect_digits(cv_img)
-        annotations = []
-        changed     = False
+        detections = self._detect_digits(cv_img)
+        matched    = self._match_clusters_to_bboxes(detections)
+        changed    = False
 
-        for det in detections:
-            digit, bbox, conf = det[0], det[3], det[4]
-            dist, world_pos = self._bbox_to_world(bbox)
+        for digit, bbox, conf, dist, cluster in matched:
+            if cluster is None:
+                continue
+            world_pos = self._cluster_to_world(cluster)
+            if world_pos is None:
+                continue
+            wx, wy = world_pos
+            if not self._in_box_zone(wx, wy):
+                rospy.logwarn_throttle(2.0, "[zone外] 数字=%s 位置=(%.2f,%.2f)", digit, wx, wy)
+                continue
+            if self._already_counted(wx, wy, digit):
+                continue
+            if self._add_observation(digit, wx, wy, robot_pos) == 'new':
+                changed = True
+
+        if changed:
+            self._publish_results()
+
+    def _display_cb(self, _):
+        """
+        独立显示定时器（5Hz）：只做 YOLO画框+发图，不修改候选池/计数状态。
+        解决"站着不动时 debug image 冻结"的问题。
+        """
+        if self.latest_image is None:
+            return
+        if self.pub_debug.get_num_connections() == 0 and not self.save_debug:
+            return
+        try:
+            cv_img = self.bridge.imgmsg_to_cv2(self.latest_image, desired_encoding='bgr8')
+        except Exception:
+            return
+
+        detections = self._detect_digits(cv_img)
+        matched    = self._match_clusters_to_bboxes(detections)
+        annotations = []
+
+        for digit, bbox, conf, dist, cluster in matched:
+            if cluster is None:
+                annotations.append((bbox, digit, conf, None, 'nopos', None))
+                continue
+            world_pos = self._cluster_to_world(cluster)
             if world_pos is None:
                 annotations.append((bbox, digit, conf, dist, 'nopos', None))
                 continue
             wx, wy = world_pos
             if not self._in_box_zone(wx, wy):
-                rospy.logwarn_throttle(2.0, "[zone外] 数字=%s 位置=(%.2f, %.2f) zone=[%.1f~%.1f, %.1f~%.1f]",
-                                       digit, wx, wy,
-                                       self.BOX_X_MIN, self.BOX_X_MAX,
-                                       self.BOX_Y_MIN, self.BOX_Y_MAX)
-                annotations.append((bbox, digit, conf, dist, 'nopos', world_pos))
+                annotations.append((bbox, digit, conf, dist, 'nopos', (wx, wy)))
                 continue
-            if self._already_counted(wx, wy, digit):
-                annotations.append((bbox, digit, conf, dist, 'dup', world_pos))
-                continue
+            status = self._get_display_status(wx, wy, digit)
+            annotations.append((bbox, digit, conf, dist, status, (wx, wy)))
 
-            # 加入候选池，尝试多观测确认
-            status = self._add_observation(digit, wx, wy, robot_pos)
-            annotations.append((bbox, digit, conf, dist, status, world_pos))
-            if status == 'new':
-                changed = True
-
-        if changed:
-            self._publish_results()
         self._publish_debug_image(cv_img, annotations)
 
     def _add_observation(self, digit, wx, wy, robot_pos):
@@ -511,78 +542,81 @@ class BoxCounter:
             detections.append((digit, cx, cy, bbox, conf))
         return detections
 
-    # ── bbox → 世界坐标（点云聚类法） ────────────────────
+    # ── 点云聚类匹配（全局一对一分配） ──────────────────────
 
-    def _bbox_to_world(self, bbox):
+    _FX = _FY = 554.254
+    _CX, _CY  = 320.0, 256.0
+
+    def _match_clusters_to_bboxes(self, detections):
         """
-        用DBSCAN cluster中心匹配YOLO bbox：
-        1. 把每个cluster中心投影到图像坐标
-        2. 找投影点最接近bbox中心且在bbox内的cluster
-        3. 用该cluster的3D中心做TF变换得世界坐标
-        返回 (dist, (wx, wy)) 或 (None, None)。
+        全局一对一排他匹配：每个cluster只分配给一个bbox，避免相邻同数字箱子共用cluster。
+        detections: [(digit, cx, cy, bbox, conf), ...]
+        返回:       [(digit, bbox, conf, dist_or_None, cluster_or_None), ...]
         """
-        FX = 554.254
-        FY = 554.254
-        CX = 320.0
-        CY = 256.0
+        result = [(d[0], d[3], d[4], None, None) for d in detections]
+        if not self._box_clusters or not detections:
+            return result
 
-        x1 = min(p[0] for p in bbox)
-        x2 = max(p[0] for p in bbox)
-        y1 = min(p[1] for p in bbox)
-        y2 = max(p[1] for p in bbox)
-        cx_px = (x1 + x2) / 2.0
-        cy_px = (y1 + y2) / 2.0
-
-        # 扩大bbox范围（允许cluster投影点略超出框）
-        margin = max((x2 - x1) * 0.3, 20)
-
-        if not self._box_clusters:
-            return None, None
-
-        best_cluster = None
-        best_dist_px = float('inf')
-
+        # 预计算每个cluster在图像中的投影坐标
+        projs = []
         for clu in self._box_clusters:
             vx, vy, vz = clu['center']
-            if vx <= 0.3:   # 在机器人后方或太近
+            if vx <= 0.3:
+                projs.append(None)
+            else:
+                u = self._FX * (-vy) / vx + self._CX
+                v = self._FY * (-vz) / vx + self._CY
+                projs.append((u, v))
+
+        # 构建所有合法 (bbox_idx, cluster_idx, pixel_dist) 三元组
+        pairs = []
+        for bi, det in enumerate(detections):
+            bbox = det[3]
+            x1 = min(p[0] for p in bbox)
+            x2 = max(p[0] for p in bbox)
+            y1 = min(p[1] for p in bbox)
+            y2 = max(p[1] for p in bbox)
+            cx_px = (x1 + x2) / 2.0
+            cy_px = (y1 + y2) / 2.0
+            margin = max((x2 - x1) * 0.3, 20)
+            for ci, proj in enumerate(projs):
+                if proj is None:
+                    continue
+                u, v = proj
+                if not (x1 - margin <= u <= x2 + margin):
+                    continue
+                if not (y1 - margin <= v <= y2 + margin):
+                    continue
+                d_px = math.hypot(u - cx_px, v - cy_px)
+                pairs.append((d_px, bi, ci))
+
+        # 贪心分配：按距离从小到大，每个bbox和cluster各只用一次
+        pairs.sort()
+        used_bbox    = set()
+        used_cluster = set()
+        for d_px, bi, ci in pairs:
+            if bi in used_bbox or ci in used_cluster:
                 continue
+            clu = self._box_clusters[ci]
+            result[bi] = (detections[bi][0], detections[bi][3], detections[bi][4],
+                          clu['h_dist'], clu)
+            used_bbox.add(bi)
+            used_cluster.add(ci)
+            rospy.logdebug("[match] bbox%d ← cluster%d dist=%.2fm px_err=%.1f",
+                           bi, ci, clu['h_dist'], d_px)
 
-            # velodyne → 相机像素坐标
-            # cam_Z=vx(前), cam_X=-vy(右=负y), cam_Y=-vz(下=负z)
-            u = FX * (-vy) / vx + CX
-            v = FY * (-vz) / vx + CY
+        return result
 
-            # 检查投影点是否在bbox范围内（含margin）
-            if not (x1 - margin <= u <= x2 + margin):
-                continue
-            if not (y1 - margin <= v <= y2 + margin):
-                continue
-
-            # 找到投影点最接近bbox中心的cluster
-            d_px = math.hypot(u - cx_px, v - cy_px)
-            if d_px < best_dist_px:
-                best_dist_px = d_px
-                best_cluster = clu
-
-        if best_cluster is None:
-            return None, None
-
-        center = best_cluster['center']
-        dist = best_cluster['h_dist']
-
-        rospy.loginfo("[cluster] 匹配 dist=%.2fm center=(%.2f,%.2f,%.2f) px_err=%.1f",
-                      dist, center[0], center[1], center[2], best_dist_px)
-
+    def _cluster_to_world(self, cluster):
+        """velodyne帧cluster中心 → map帧(wx,wy)，失败返回None。"""
+        center = cluster['center']
         if self.use_ground_truth:
             if self.gt_pose is None:
-                return dist, None
+                return None
             rx, ry, ryaw = self.gt_pose
-            # velodyne ≈ base_link，直接旋转到世界坐标
             wx = rx + center[0] * math.cos(ryaw) - center[1] * math.sin(ryaw)
             wy = ry + center[0] * math.sin(ryaw) + center[1] * math.cos(ryaw)
-            return dist, (wx, wy)
-
-        # TF模式：velodyne帧 → map帧
+            return (wx, wy)
         p = PointStamped()
         p.header.frame_id = self._cloud_frame
         p.header.stamp    = rospy.Time(0)
@@ -590,11 +624,27 @@ class BoxCounter:
         p.point.y = float(center[1])
         p.point.z = float(center[2])
         try:
-            map_p = self.tf_buffer.transform(p, self.map_frame, rospy.Duration(0.1))
-            return dist, (map_p.point.x, map_p.point.y)
+            mp = self.tf_buffer.transform(p, self.map_frame, rospy.Duration(0.1))
+            return (mp.point.x, mp.point.y)
         except tf2_ros.TransformException as e:
             rospy.logwarn_throttle(2.0, "TF失败: %s", e)
-            return dist, None
+            return None
+
+    def _get_display_status(self, wx, wy, digit):
+        """只读查询：根据当前counted/candidates返回显示状态，不修改任何状态。"""
+        for entry in self.counted:
+            d = math.hypot(wx - entry['wx'], wy - entry['wy'])
+            if d < self.dedup_any_digit:
+                return 'dup'
+            if d < self.dedup_same_digit and entry['digit'] == digit:
+                return 'dup'
+        for cand in self._candidates.values():
+            if cand['digit'] != digit:
+                continue
+            if math.hypot(wx - cand['wx'], wy - cand['wy']) < self.dedup_same_digit:
+                obs_n = len(cand['obs'])
+                return 'pending'   # 调用方可自行查 obs_n
+        return 'pending'  # 尚未进入候选池，下次计数时会成为pending
 
     # ── 去重（数字+坐标联合） ────────────────────────────
 
