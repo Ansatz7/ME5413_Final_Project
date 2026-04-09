@@ -69,3 +69,11 @@ runs/
 # Misc generated files
 frames.gv
 frames.pdf
+
+# 第三方依赖包（本地编译用，不提交）
+src/fast_gicp/
+src/FAST_LIO_SLAM/
+src/livox_ros_driver/
+
+# catkin_tools 本地缓存
+.catkin_tools/
