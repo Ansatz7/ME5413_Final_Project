@@ -31,6 +31,7 @@ from cv_bridge import CvBridge
 from ultralytics import YOLO
 
 import re
+from sklearn.cluster import DBSCAN
 import sensor_msgs.point_cloud2 as pc2
 from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import Bool, String
@@ -87,8 +88,10 @@ class BoxCounter:
         self.latest_image = None
         self.gt_pose      = None
         # 点云水平角→最近距离查找表，在点云回调中预计算
-        self._cloud_dist  = None   # np.ndarray shape (_CLOUD_BINS,)，inf表示无数据
-        self._cloud_pts   = None   # np.ndarray shape (_CLOUD_BINS, 3)，最近点的xyz（velodyne帧）
+        self._cloud_dist  = None   # 保留兼容，不再使用
+        self._cloud_pts   = None
+        self._cloud_frame = 'velodyne'
+        self._box_clusters = []    # 每帧更新的箱子候选cluster列表
         self._last_cloud_time = None
         self.counter      = {}
         # 已确认箱子：[{'digit':str, 'wx':float, 'wy':float,
@@ -265,10 +268,13 @@ class BoxCounter:
 
     def _cloud_cb(self, msg):
         """
-        将 Velodyne 点云预处理为"水平角→最近距离"查找表。
-        只保留合理高度范围的点（过滤地面和天花板），提升深度精度。
+        Velodyne点云处理：
+        1. 过滤地面和天花板
+        2. DBSCAN聚类 → 找到候选箱子的3D中心（velodyne帧）
+        3. 按cluster尺寸过滤（保留符合箱子大小的）
         """
         self._last_cloud_time = msg.header.stamp
+        self._cloud_frame = msg.header.frame_id
         try:
             pts = np.array(list(
                 pc2.read_points(msg, field_names=('x', 'y', 'z'), skip_nans=True)
@@ -278,34 +284,55 @@ class BoxCounter:
         if len(pts) == 0:
             return
 
-        # 高度过滤：保留箱子所在高度层（velodyne 帧，z 约 -0.4~1.5m 对应地面到箱顶）
-        mask = (pts[:, 2] > -0.5) & (pts[:, 2] < 1.5)
-        pts  = pts[mask]
-        if len(pts) == 0:
+        # 步骤1：高度过滤
+        # 地面约在z=-0.5m（velodyne安装高度约0.5m），箱子高0.8m
+        # 保留z∈(0.05, 1.2)：去掉地面、保留箱子侧面点
+        mask = (pts[:, 2] > 0.05) & (pts[:, 2] < 1.2)
+        pts = pts[mask]
+        if len(pts) < 5:
+            self._box_clusters = []
             return
 
-        # 水平角 & 水平距离
-        h_angles = np.arctan2(pts[:, 1], pts[:, 0])          # [-π, π]
-        h_dists  = np.sqrt(pts[:, 0]**2 + pts[:, 1]**2)
+        # 步骤2：只保留前方一定距离内的点（减少计算量）
+        h_dists = np.sqrt(pts[:, 0]**2 + pts[:, 1]**2)
+        pts = pts[h_dists < 15.0]
+        if len(pts) < 5:
+            self._box_clusters = []
+            return
 
-        # 建查找表：每个角度 bin 存储最近距离及其对应点
-        dist_table = np.full(_CLOUD_BINS, np.inf, dtype=np.float32)
-        pts_table  = np.zeros((_CLOUD_BINS, 3), dtype=np.float32)
+        # 步骤3：DBSCAN聚类（水平面xy做聚类，忽略z）
+        db = DBSCAN(eps=0.25, min_samples=3).fit(pts[:, :2])
+        labels = db.labels_
 
-        bin_idx = (np.floor((h_angles + math.pi) / _CLOUD_BIN_RES)
-                   .astype(np.int32).clip(0, _CLOUD_BINS - 1))
+        clusters = []
+        for label in set(labels):
+            if label == -1:  # 噪点
+                continue
+            cluster_pts = pts[labels == label]
 
-        # 遍历所有点，保留每个 bin 里最近的
-        order = np.argsort(h_dists)
-        for i in order:
-            b = bin_idx[i]
-            if h_dists[i] < dist_table[b]:
-                dist_table[b] = h_dists[i]
-                pts_table[b]  = pts[i]
+            # 计算cluster的水平尺寸
+            x_extent = cluster_pts[:, 0].max() - cluster_pts[:, 0].min()
+            y_extent = cluster_pts[:, 1].max() - cluster_pts[:, 1].min()
+            max_extent = max(x_extent, y_extent)
+            min_extent = min(x_extent, y_extent)
 
-        self._cloud_dist = dist_table
-        self._cloud_pts  = pts_table
-        self._cloud_frame = msg.header.frame_id
+            # 箱子0.8×0.8m，允许部分遮挡，保留0.2~2.0m范围的cluster
+            if max_extent < 0.2 or max_extent > 2.0:
+                continue
+            # 过滤极细长物体（长墙壁等）：仅当两边都有一定宽度时才卡比例
+            # 正面看箱子时min_extent可能很小（<0.05m），不能严格卡
+            if min_extent > 0.1 and max_extent / (min_extent + 1e-6) > 6.0:
+                continue
+
+            center = cluster_pts.mean(axis=0)  # (cx, cy, cz) in velodyne frame
+            h_dist = math.sqrt(center[0]**2 + center[1]**2)
+            clusters.append({'center': center, 'h_dist': h_dist,
+                              'n_pts': len(cluster_pts)})
+
+        self._box_clusters = clusters
+        if clusters:
+            rospy.loginfo_throttle(2.0, "[cluster] 找到 %d 个箱子候选 (共%d个过滤后点)",
+                                   len(clusters), len(pts))
 
     # ── 触发处理 ─────────────────────────────────────────
 
@@ -329,10 +356,10 @@ class BoxCounter:
             self.pub_done.publish(Bool(data=True))
             return
 
-        # 等待传送后点云刷新（Velodyne 10Hz，最多等0.5s）
+        # 等待点云刷新（Velodyne 10Hz，最多等0.5s）
         wait_start = rospy.Time.now()
         rate = rospy.Rate(50)
-        while (self._cloud_dist is None or self._last_cloud_time is None or
+        while (self._last_cloud_time is None or
                (rospy.Time.now() - self._last_cloud_time).to_sec() > 0.15):
             if (rospy.Time.now() - wait_start).to_sec() > 0.5:
                 rospy.logwarn("等待点云超时，跳过")
@@ -349,7 +376,7 @@ class BoxCounter:
         核心检测逻辑：处理当前图像帧，将结果加入多观测候选池并发布调试图。
         robot_pos: (rx, ry) in map frame，连续模式下提供，可为 None（跳过多观测距离校验）。
         """
-        if self.latest_image is None or self._cloud_dist is None:
+        if self.latest_image is None or self._last_cloud_time is None:
             return
         try:
             cv_img = self.bridge.imgmsg_to_cv2(self.latest_image, desired_encoding='bgr8')
@@ -488,64 +515,69 @@ class BoxCounter:
 
     def _bbox_to_world(self, bbox):
         """
-        用 YOLO bbox 对应水平角范围内的所有 Velodyne 点求均值，
-        得到箱子3D中心，再用TF转到map帧。
-        比单点查表精度高，对噪点鲁棒。
+        用DBSCAN cluster中心匹配YOLO bbox：
+        1. 把每个cluster中心投影到图像坐标
+        2. 找投影点最接近bbox中心且在bbox内的cluster
+        3. 用该cluster的3D中心做TF变换得世界坐标
         返回 (dist, (wx, wy)) 或 (None, None)。
         """
-        # bbox四点：[[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
+        FX = 554.254
+        FY = 554.254
+        CX = 320.0
+        CY = 256.0
+
         x1 = min(p[0] for p in bbox)
         x2 = max(p[0] for p in bbox)
+        y1 = min(p[1] for p in bbox)
+        y2 = max(p[1] for p in bbox)
+        cx_px = (x1 + x2) / 2.0
+        cy_px = (y1 + y2) / 2.0
 
-        # 像素→Velodyne水平角（rad）
-        # 注意符号：相机坐标系 cam_X = -body_y（右=负y），
-        # 而Velodyne水平角 = atan2(y, x)，左（+y）为正。
-        # 因此 velodyne_angle = -camera_angle，且 x1/x2 需交换：
-        #   图像左边缘(x1) → 3D左侧 → velodyne大正角（angle_right）
-        #   图像右边缘(x2) → 3D右侧 → velodyne小/负角（angle_left）
-        FX = 554.254
-        CX = 320.0
-        angle_left  = math.atan2(CX - x2, FX)   # velodyne角范围低端
-        angle_right = math.atan2(CX - x1, FX)   # velodyne角范围高端
+        # 扩大bbox范围（允许cluster投影点略超出框）
+        margin = max((x2 - x1) * 0.3, 20)
 
-        # 转换到点云查找表的bin范围
-        bin_left  = int((angle_left  + math.pi) / _CLOUD_BIN_RES)
-        bin_right = int((angle_right + math.pi) / _CLOUD_BIN_RES)
-        bin_left  = max(0, min(bin_left,  _CLOUD_BINS - 1))
-        bin_right = max(0, min(bin_right, _CLOUD_BINS - 1))
-        if bin_left > bin_right:
-            bin_left, bin_right = bin_right, bin_left
+        if not self._box_clusters:
+            return None, None
 
-        # 收集该角度范围内所有有效点
-        # cloud_cb 已做过高度过滤（z∈[-0.5,1.5]），这里不再重复过滤
-        valid_pts = []
-        for b in range(bin_left, bin_right + 1):
-            if np.isfinite(self._cloud_dist[b]):
-                valid_pts.append(self._cloud_pts[b])
+        best_cluster = None
+        best_dist_px = float('inf')
 
-        if len(valid_pts) < self.min_bbox_pts:
-            return None, None   # 点太少，深度不可信
+        for clu in self._box_clusters:
+            vx, vy, vz = clu['center']
+            if vx <= 0.3:   # 在机器人后方或太近
+                continue
 
-        valid_pts = np.array(valid_pts)
-        h_dists   = np.sqrt(valid_pts[:, 0]**2 + valid_pts[:, 1]**2)
+            # velodyne → 相机像素坐标
+            # cam_Z=vx(前), cam_X=-vy(右=负y), cam_Y=-vz(下=负z)
+            u = FX * (-vy) / vx + CX
+            v = FY * (-vz) / vx + CY
 
-        # 只取最近点簇（距最近点0.4m以内），过滤背景墙
-        min_d  = h_dists.min()
-        near   = valid_pts[h_dists <= min_d + 0.4]
-        center = near.mean(axis=0)
-        dist   = float(min_d)
+            # 检查投影点是否在bbox范围内（含margin）
+            if not (x1 - margin <= u <= x2 + margin):
+                continue
+            if not (y1 - margin <= v <= y2 + margin):
+                continue
 
-        rospy.logwarn_throttle(1.0,
-            "[depth] bbox_pts=%d min_d=%.2fm near_pts=%d center=(%.2f,%.2f,%.2f)",
-            len(valid_pts), min_d, len(near), center[0], center[1], center[2])
+            # 找到投影点最接近bbox中心的cluster
+            d_px = math.hypot(u - cx_px, v - cy_px)
+            if d_px < best_dist_px:
+                best_dist_px = d_px
+                best_cluster = clu
+
+        if best_cluster is None:
+            return None, None
+
+        center = best_cluster['center']
+        dist = best_cluster['h_dist']
+
+        rospy.loginfo("[cluster] 匹配 dist=%.2fm center=(%.2f,%.2f,%.2f) px_err=%.1f",
+                      dist, center[0], center[1], center[2], best_dist_px)
 
         if self.use_ground_truth:
-            # GT模式：用 Gazebo 真值位姿直接计算世界坐标
             if self.gt_pose is None:
                 return dist, None
             rx, ry, ryaw = self.gt_pose
-            # velodyne坐标系近似等于机器人坐标系（偏移很小）
-            # 机体坐标 → 世界坐标
+            # velodyne ≈ base_link，直接旋转到世界坐标
             wx = rx + center[0] * math.cos(ryaw) - center[1] * math.sin(ryaw)
             wy = ry + center[0] * math.sin(ryaw) + center[1] * math.cos(ryaw)
             return dist, (wx, wy)
@@ -554,7 +586,9 @@ class BoxCounter:
         p = PointStamped()
         p.header.frame_id = self._cloud_frame
         p.header.stamp    = rospy.Time(0)
-        p.point.x, p.point.y, p.point.z = float(center[0]), float(center[1]), float(center[2])
+        p.point.x = float(center[0])
+        p.point.y = float(center[1])
+        p.point.z = float(center[2])
         try:
             map_p = self.tf_buffer.transform(p, self.map_frame, rospy.Duration(0.1))
             return dist, (map_p.point.x, map_p.point.y)
