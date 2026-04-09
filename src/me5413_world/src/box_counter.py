@@ -65,7 +65,7 @@ class BoxCounter:
         self.min_conf         = rospy.get_param('~min_conf',          0.9)
         self.use_ground_truth = rospy.get_param('~use_ground_truth',  False)
         # 去重阈值：同数字用1.2m，不同数字用0.4m
-        self.dedup_same_digit = rospy.get_param('~dedup_same_digit',  1.2)
+        self.dedup_same_digit = rospy.get_param('~dedup_same_digit',  1.2)  # 降低：DBSCAN精度已够，3.0m会误杀相邻同数字箱
         self.dedup_any_digit  = rospy.get_param('~dedup_any_digit',   0.4)
         # bbox内有效点最少数量，不足则认为深度不可信
         self.min_bbox_pts     = rospy.get_param('~min_bbox_pts',      1)

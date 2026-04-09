@@ -23,7 +23,7 @@
     <param name="min_obs_dist"      value="0.5"/>
     <!-- 检测置信度和去重参数 -->
     <param name="min_conf"          value="0.9"/>
-    <param name="dedup_same_digit"  value="3.0"/>
+    <param name="dedup_same_digit"  value="1.2"/>
     <param name="dedup_any_digit"   value="0.4"/>
     <param name="min_bbox_pts"      value="1"/>
     <!-- 调试图保存（可选，默认关闭） -->
