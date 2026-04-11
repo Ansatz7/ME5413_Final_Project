@@ -31,4 +31,4 @@ obstacles_layer:
     raytrace_range: 6.0
 
 inflater_layer:
-  inflation_radius: 0.5
+  inflation_radius: 0.25
