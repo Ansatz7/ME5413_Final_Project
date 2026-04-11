@@ -25,8 +25,9 @@
     <rosparam file="$(find jackal_navigation)/params/move_base_params.yaml" command="load"/>
     <param name="base_global_planner" value="navfn/NavfnROS"/>
     <param name="base_local_planner"  value="base_local_planner/TrajectoryPlannerROS"/>
-    <!-- 放宽朝向容差，避免机器人在每个巡逻点原地长时间旋转对齐 -->
-    <param name="TrajectoryPlannerROS/yaw_goal_tolerance" value="1.0"/>
+    <!-- 放宽容差：位置到了直接成功，不等朝向对齐（避免原地旋转触发recovery） -->
+    <param name="TrajectoryPlannerROS/xy_goal_tolerance"  value="0.3"/>
+    <param name="TrajectoryPlannerROS/yaw_goal_tolerance" value="1"/>
     <remap from="odom" to="odometry/filtered"/>
   </node>
 

@@ -566,7 +566,7 @@ class BoxCounter:
             if depth <= 0.3:   # 点在左侧或正后方，右置相机不可见
                 projs.append(None)
             else:
-                u = self._FX * vx / depth + self._CX
+                u = self._FX * (-vx) / depth + self._CX
                 v = self._FY * (-vz) / depth + self._CY
                 projs.append((u, v))
 
