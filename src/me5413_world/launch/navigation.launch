@@ -4,14 +4,24 @@
   <node name="teleop_twist_keyboard" pkg="teleop_twist_keyboard" type="teleop_twist_keyboard.py" output="screen" respawn="true"/>
 
   <!-- Run the map server -->
-  <arg name="map_file" default="$(find me5413_world)/maps/my_map.yaml"/>
+  <arg name="map_file" default="$(find me5413_world)/maps/me5413_2d_map.yaml"/>
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)" />
   
-  <!-- Launch the AMCL Localizer -->
-  <include file="$(find jackal_navigation)/launch/include/amcl.launch" />
+  <!-- 定位：hdl_localization（3D NDT，替代AMCL） -->
+  <include file="$(find hdl_localization)/launch/hdl_localization.launch"/>
 
-  <!-- Launch Move Base -->
-  <include file="$(find jackal_navigation)/launch/include/move_base.launch" />
+  <!-- Launch Move Base（用自定义参数，避障用Velodyne点云而非2D激光） -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find jackal_navigation)/params/map_nav_params/local_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find jackal_navigation)/params/map_nav_params/global_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find jackal_navigation)/params/base_local_planner_params.yaml" command="load"/>
+    <rosparam file="$(find jackal_navigation)/params/move_base_params.yaml" command="load"/>
+    <param name="base_global_planner" value="navfn/NavfnROS"/>
+    <param name="base_local_planner"  value="base_local_planner/TrajectoryPlannerROS"/>
+    <remap from="odom" to="odometry/filtered"/>
+  </node>
 
   <!-- Launch Rviz with our settings -->
   <node type="rviz" name="rviz" pkg="rviz" args="-d $(find me5413_world)/rviz/navigation.rviz" output="log" respawn="true"/>

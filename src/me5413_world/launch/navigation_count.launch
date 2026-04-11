@@ -1,0 +1,53 @@
+<launch>
+
+  <!-- ── 自主导航 + hdl定位 + 箱子计数 ── -->
+  <!-- 使用前提：先启动 world.launch -->
+  <!-- 启动后：RViz 里用「2D Nav Goal」点击目标点让机器人自动导航 -->
+
+  <!-- 地图服务 -->
+  <arg name="map_file" default="$(find me5413_world)/maps/me5413_2d_map.yaml"/>
+  <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
+
+  <!-- 定位：hdl_localization（3D NDT，供导航和计数共用） -->
+  <include file="$(find hdl_localization)/launch/hdl_localization.launch"/>
+
+  <!-- 自主导航：move_base（A*全局规划 + DWA局部规划，Velodyne点云避障） -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find jackal_navigation)/params/map_nav_params/local_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find jackal_navigation)/params/map_nav_params/global_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find jackal_navigation)/params/base_local_planner_params.yaml" command="load"/>
+    <rosparam file="$(find jackal_navigation)/params/move_base_params.yaml" command="load"/>
+    <param name="base_global_planner" value="navfn/NavfnROS"/>
+    <param name="base_local_planner"  value="base_local_planner/TrajectoryPlannerROS"/>
+    <remap from="odom" to="odometry/filtered"/>
+  </node>
+
+  <!-- 箱子计数节点（与手动模式参数相同，自动跟随机器人移动触发） -->
+  <node name="box_counter_node" pkg="me5413_world" type="box_counter.py" output="screen">
+    <param name="use_ground_truth"  value="false"/>
+    <param name="map_frame"         value="map"/>
+    <param name="robot_frame"       value="base_link"/>
+    <!-- 连续检测：2Hz触发，移动超过0.3m才处理一次 -->
+    <param name="continuous_hz"     value="2.0"/>
+    <param name="move_dist_min"     value="0.3"/>
+    <!-- 多观测确认：至少从2个相距>=0.5m的位置看到同一箱子才计入 -->
+    <param name="min_obs"           value="2"/>
+    <param name="min_obs_dist"      value="0.5"/>
+    <!-- 检测置信度和去重参数 -->
+    <param name="min_conf"          value="0.9"/>
+    <param name="dedup_same_digit"  value="1.2"/>
+    <param name="dedup_any_digit"   value="0.4"/>
+    <param name="min_bbox_pts"      value="1"/>
+    <param name="save_debug"        value="false"/>
+    <!-- 调试用GT参考，正式演示时可改为false -->
+    <param name="show_gt"           value="true"/>
+  </node>
+
+  <!-- RViz -->
+  <node type="rviz" name="rviz" pkg="rviz"
+        args="-d $(find me5413_world)/rviz/hdl_locolization.rviz"
+        output="log" respawn="false"/>
+
+</launch>
