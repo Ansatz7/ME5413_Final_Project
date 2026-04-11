@@ -23,6 +23,7 @@ level1_patrol.py — 一楼自主巡逻节点
 import math
 import rospy
 import actionlib
+import tf2_ros
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from geometry_msgs.msg import Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
@@ -35,29 +36,37 @@ from std_msgs.msg import Bool, Int16
 
 PATROL_WAYPOINTS = [
     # ── #1  入口穿越（门洞 y∈[-0.82,0.68]，宽1.5m）─────────────────
-    ( 3.5,  5.0,  90, '#1  入口'),
+    ( 3.5,  1.0,  90, '0 入口'),          # 出生口
 
     # ── #3~#5  房间 A ────────────────────────────────────────────────
-    ( 3.5, 16.0,   0, '#3  A-左墙上'),    # (3.5,0)→(3.5,16)，向北
-    (11.5, 16.0, -90, '#4  A-通道顶左'),  # (3.5,16)→(11.5,16)，向东
-    (12.5,  2.0,   0, '#5+6 通道中'),     # #5/#6合并，连通口中点，朝东
-    (13.5, 16.0,   0, '#7  B-通道顶右'),  # (13.5,13)→(13.5,16)，向北
-    (21.0, 16.0, -90, '#8  B-右墙上'),    # 离开角落，避免贴墙卡住
+    ( 4.0, 16.0,   0, '1 A-左上'),          # A左上
+    (11.5, 15.5, -90, '2 A-右上'),          # A右上
+    (11.5,  7.5, -90, '3 A-右中'),          # A右中
+
+    (13.0,  2.0,  45, '4 通道中'),          # A进B
+    (14.0, 16.0,   0, '5 B-左上'),          # B左上
+    (21.0, 15.5, -90, '6 B-右上'),          # B右上
+
 
     # ── #10~#13  房间 B 下半 → 穿越下连通口 ─────────────────────────
-    (21.0,  1.5, -90, '#10a B-右墙下（转角前）'),  # 继续向南，还没到底
-    (19.0, -0.8, 180, '#10b B-右墙下（转角后）'),  # 已过角，向西
-    (13.5, -0.8,  90, '#11 B-通道底右'),  # (21.0,-1)→(13.5,-1)，向西
-    (12.5, 13.0, 180, '#12 B-通道下右'),  # (13.5,-1)→(13.5,2)，向北
-    (11.5, -0.8, 180, '#13 A-通道下左'),  # (13.5,2)→(11.5,2)，向西
+    (21.0,  1.0, -90, '7 B-右墙下（转角前）'), # B右下前
+    (19.0, -1.0, 180, '8 B-右墙下（转角后）'), # B右下后
+    (13.5, -0.5,  90, '9 B-左下'),           # B左下
+    (13.5,  7.5,  90, '10 A-右中'),          # B左中
+    (12.0, 13.0,-135, '11 通道中'),          # B进A
+    (11.0, -1.0, 180, '12 A-右下'),          # A右下
 
     # ── #14  交接点 ──────────────────────────────────────────────────
-    ( 7.5, -1.5, -90, '#14 leave_level_1'),
+    ( 7.5, -1.5, -90, '13 leave_level_1'),  # 交接点
+
+
 ]
 
 
 # ── 参数 ─────────────────────────────────────────────────────────────
 GOAL_TIMEOUT   = 60.0   # 单点导航超时（秒）
+ARRIVAL_DIST   = 0.4    # 距目标 xy 小于此值（m）
+ARRIVAL_YAW    = 2.0    # 朝向误差小于此值（rad，约114°）——两者同时满足才视为到达
 ARRIVE_PAUSE   = 0.0    # 到达即走，无停顿（box_counter 行进中持续采样）
 RESPAWN_BOXES  = True   # 启动时是否重生成箱子
 
@@ -168,6 +177,9 @@ class Level1Patrol:
         self.pub_markers  = rospy.Publisher('/patrol_waypoints',
                                             MarkerArray, queue_size=1, latch=True)
 
+        self._tf_buf = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buf)
+
         self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
         rospy.loginfo('[level1_patrol] 等待 move_base 就绪...')
         self.client.wait_for_server()
@@ -192,26 +204,77 @@ class Level1Patrol:
 
     # ── 导航到单个目标点 ──────────────────────────────────────────────
 
+    def _robot_pose(self):
+        """返回机器人当前 map 坐标 (x, y, yaw_rad)，失败返回 None。"""
+        try:
+            t = self._tf_buf.lookup_transform(
+                'map', 'base_link', rospy.Time(0), rospy.Duration(0.1))
+            tr = t.transform.translation
+            q  = t.transform.rotation
+            siny = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            yaw  = math.atan2(siny, cosy)
+            return tr.x, tr.y, yaw
+        except Exception:
+            return None
+
+    @staticmethod
+    def _yaw_err(a, b):
+        """返回两角之间的最小绝对差（rad），结果在 [0, π]。"""
+        d = (a - b) % (2 * math.pi)
+        if d > math.pi:
+            d = 2 * math.pi - d
+        return d
+
     def _navigate_to(self, x, y, yaw_deg, label):
         rospy.loginfo('[level1_patrol] → %s  (%.1f, %.1f, %d°)',
                       label, x, y, yaw_deg)
         goal = make_goal(x, y, yaw_deg)
         self.client.send_goal(goal)
 
-        finished = self.client.wait_for_result(rospy.Duration(GOAL_TIMEOUT))
-        if not finished:
-            rospy.logwarn('[level1_patrol] 超时！取消目标 %s，继续下一点', label)
-            self.client.cancel_goal()
-            return False
+        rate = rospy.Rate(5.0)
+        start = rospy.Time.now()
 
-        state = self.client.get_state()
-        if state == actionlib.GoalStatus.SUCCEEDED:
-            rospy.loginfo('[level1_patrol] 到达 %s ✓', label)
-            rospy.sleep(ARRIVE_PAUSE)
-            return True
-        else:
-            rospy.logwarn('[level1_patrol] 导航失败（state=%d），跳过 %s', state, label)
-            return False
+        while not rospy.is_shutdown():
+            # ── 1. actionlib 已有结果 ────────────────────────────────
+            state = self.client.get_state()
+            if state == actionlib.GoalStatus.SUCCEEDED:
+                rospy.loginfo('[level1_patrol] 到达 %s ✓ (SUCCEEDED)', label)
+                rospy.sleep(ARRIVE_PAUSE)
+                return True
+            if state in (actionlib.GoalStatus.ABORTED,
+                         actionlib.GoalStatus.REJECTED,
+                         actionlib.GoalStatus.PREEMPTED):
+                rospy.logwarn('[level1_patrol] 导航失败（state=%d），跳过 %s',
+                              state, label)
+                return False
+
+            # ── 2. 距离+朝向检查：同时满足才视为到达 ────────────────
+            pose = self._robot_pose()
+            if pose is not None:
+                rx, ry, ryaw = pose
+                dist    = math.hypot(rx - x, ry - y)
+                yawerr  = self._yaw_err(ryaw, math.radians(yaw_deg))
+                if dist < ARRIVAL_DIST and yawerr < ARRIVAL_YAW:
+                    rospy.loginfo(
+                        '[level1_patrol] 到达 %s ✓ (dist=%.2fm yaw_err=%.2frad)',
+                        label, dist, yawerr)
+                    self.client.cancel_goal()
+                    rospy.sleep(0.3)
+                    return True
+
+            # ── 3. 超时保底 ──────────────────────────────────────────
+            if (rospy.Time.now() - start).to_sec() > GOAL_TIMEOUT:
+                rospy.logwarn('[level1_patrol] 超时！取消目标 %s，继续下一点',
+                              label)
+                try:
+                    self.client.cancel_goal()
+                except Exception:
+                    pass
+                rospy.sleep(0.5)
+                return False
+
+            rate.sleep()
 
     # ── 主流程 ────────────────────────────────────────────────────────
 

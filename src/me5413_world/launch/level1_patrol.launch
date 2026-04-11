@@ -11,28 +11,37 @@
   <!-- 定位：hdl_localization（3D NDT，供导航和计数共用） -->
   <include file="$(find hdl_localization)/launch/hdl_localization.launch"/>
 
-  <!-- 自主导航：move_base -->
-  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+  <!-- 自主导航：move_base（绑定P核4-7，不和NDT抢核）-->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen"
+        launch-prefix="taskset -c 4,5,6,7">
     <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="global_costmap"/>
     <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
     <rosparam file="$(find jackal_navigation)/params/map_nav_params/local_costmap_params.yaml" command="load"/>
     <rosparam file="$(find jackal_navigation)/params/map_nav_params/global_costmap_params.yaml" command="load"/>
-    <param name="global_costmap/origin_x"  value="-5.0"/>
-    <param name="global_costmap/origin_y"  value="-8.0"/>
-    <param name="global_costmap/width"     value="55.0"/>
-    <param name="global_costmap/height"    value="27.0"/>
-    <rosparam file="$(find jackal_navigation)/params/base_local_planner_params.yaml" command="load"/>
+    <param name="global_costmap/origin_x"          value="-5.0"/>
+    <param name="global_costmap/origin_y"          value="-8.0"/>
+    <param name="global_costmap/width"             value="55.0"/>
+    <param name="global_costmap/height"            value="27.0"/>
+    <!-- global costmap 降频：规划全局路径不需要实时更新，节省CPU -->
+    <param name="global_costmap/update_frequency"  value="2.0"/>
+    <param name="global_costmap/publish_frequency" value="1.0"/>
     <rosparam file="$(find jackal_navigation)/params/move_base_params.yaml" command="load"/>
     <param name="base_global_planner" value="navfn/NavfnROS"/>
-    <param name="base_local_planner"  value="base_local_planner/TrajectoryPlannerROS"/>
-    <!-- 放宽容差：位置到了直接成功，不等朝向对齐（避免原地旋转触发recovery） -->
-    <param name="TrajectoryPlannerROS/xy_goal_tolerance"  value="0.3"/>
-    <param name="TrajectoryPlannerROS/yaw_goal_tolerance" value="1"/>
+    <param name="base_local_planner"  value="teb_local_planner/TebLocalPlannerROS"/>
+    <rosparam file="$(find me5413_world)/config/teb_local_planner_params.yaml" command="load"/>
+    <!-- 降低控制频率，减轻TEB优化的CPU压力 -->
+    <param name="controller_frequency" value="10.0"/>
+    <!-- 机器人轮廓传给TEB（Jackal: 0.42m x 0.33m） -->
+    <rosparam param="TebLocalPlannerROS/footprint_model/type" subst_value="true">polygon</rosparam>
+    <rosparam param="TebLocalPlannerROS/footprint_model/vertices">
+      [[-0.21, -0.165], [-0.21, 0.165], [0.21, 0.165], [0.21, -0.165]]
+    </rosparam>
     <remap from="odom" to="odometry/filtered"/>
   </node>
 
-  <!-- 箱子计数节点（连续运行，随机器人移动自动触发） -->
-  <node name="box_counter_node" pkg="me5413_world" type="box_counter.py" output="screen">
+  <!-- 箱子计数节点（绑定P核8-11，YOLO走GPU，CPU部分隔离） -->
+  <node name="box_counter_node" pkg="me5413_world" type="box_counter.py" output="screen"
+        launch-prefix="taskset -c 8,9,10,11">
     <param name="use_ground_truth"  value="false"/>
     <param name="map_frame"         value="map"/>
     <param name="robot_frame"       value="base_link"/>
