@@ -1,7 +1,7 @@
 <launch>
   <!-- Configuration of Jackal which you would like to simulate.
        See jackal_description for details. -->
-  <arg name="config" default="base" />
+  <arg name="config" default="me5413_right_cam" />
 
   <!-- Load Jackal's description, controllers, and teleop nodes. -->
   <!-- <include file="$(find jackal_description)/launch/description.launch">

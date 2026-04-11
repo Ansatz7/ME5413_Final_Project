@@ -18,6 +18,16 @@
 
   <xacro:sick_lms1xx_mount prefix="front" topic="front/scan"/>
 
+  <!-- 右置摄像头：朝向右侧（-y方向），用于 YOLO 箱子数字识别 -->
+  <xacro:pointgrey_flea3 frame="right_camera" name="right"
+    camera_x="0.0754" camera_y="0.029" camera_z="0.035"
+    camera_mass="0.085" hfov="1.0471975512" fps="30" width="640" height="512"/>
+  <joint name="right_camera_joint" type="fixed">
+    <origin xyz="0.0 -0.21 0.35" rpy="0 0 -1.5708"/>
+    <parent link="chassis_link"/>
+    <child link="right_camera"/>
+  </joint>
+
   <joint name="front_laser_mount_joint" type="fixed">
     <origin xyz="0 0 0.002" rpy="0 0 0" />
     <parent link="front_mount" />

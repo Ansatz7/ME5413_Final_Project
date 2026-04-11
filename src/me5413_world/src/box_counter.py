@@ -59,7 +59,7 @@ class BoxCounter:
         rospy.init_node('box_counter_node')
 
         self.cloud_topic      = rospy.get_param('~cloud_topic',       '/mid/points')
-        self.image_topic      = rospy.get_param('~image_topic',       '/front/image_raw')
+        self.image_topic      = rospy.get_param('~image_topic',       '/right/image_raw')
         self.map_frame        = rospy.get_param('~map_frame',         'map')
         self.robot_frame      = rospy.get_param('~robot_frame',       'base_link')
         self.min_conf         = rospy.get_param('~min_conf',          0.9)
@@ -558,14 +558,16 @@ class BoxCounter:
             return result
 
         # 预计算每个cluster在图像中的投影坐标
+        # 右置摄像头朝向 -y 方向：深度轴=(-vy)，水平=vx，垂直=-vz
         projs = []
         for clu in self._box_clusters:
             vx, vy, vz = clu['center']
-            if vx <= 0.3:
+            depth = -vy
+            if depth <= 0.3:   # 点在左侧或正后方，右置相机不可见
                 projs.append(None)
             else:
-                u = self._FX * (-vy) / vx + self._CX
-                v = self._FY * (-vz) / vx + self._CY
+                u = self._FX * vx / depth + self._CX
+                v = self._FY * (-vz) / depth + self._CY
                 projs.append((u, v))
 
         # 构建所有合法 (bbox_idx, cluster_idx, pixel_dist) 三元组
