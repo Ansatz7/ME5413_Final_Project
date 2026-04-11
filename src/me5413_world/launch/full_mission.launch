@@ -1,14 +1,23 @@
 <launch>
 
-  <!-- ── 一楼自主巡逻 + 箱子计数 ── -->
-  <!-- 使用前提：先启动 world.launch -->
-  <!-- 本 launch 包含：hdl定位 + move_base导航 + box_counter计数 + level1巡逻状态机 -->
+  <!-- ══════════════════════════════════════════════════════════════════
+       full_mission.launch — 完整任务（一楼巡逻 + 箱子计数 + 二楼导航）
+       前提：先启动 world.launch
+       本文件包含：
+         - 地图服务
+         - Velodyne z轴点云过滤（0.2~2.0m）
+         - hdl_localization 3D NDT 定位
+         - move_base (TEB 局部规划器)
+         - box_counter 箱子计数
+         - level1_patrol 一楼巡逻状态机
+         - auto_navigator 二楼导航状态机（等待 /me5413/level1_done）
+  ═══════════════════════════════════════════════════════════════════ -->
 
   <!-- 地图服务 -->
   <arg name="map_file" default="$(find me5413_world)/maps/me5413_2d_map.yaml"/>
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
 
-  <!-- 点云 z 轴过滤：保留 0.2~2.0m，去掉地面噪声和天花板 -->
+  <!-- 点云 z 轴过滤（保留 0.2~2.0m，去掉地面和天花板噪声） -->
   <node pkg="nodelet" type="nodelet" name="pcl_manager"
         args="manager" output="screen"/>
   <node pkg="nodelet" type="nodelet" name="velodyne_z_filter"
@@ -20,30 +29,27 @@
     <param name="filter_limit_max"  value="2.0"/>
   </node>
 
-  <!-- 定位：hdl_localization（3D NDT，供导航和计数共用） -->
+  <!-- 定位：hdl_localization（3D NDT） -->
   <include file="$(find hdl_localization)/launch/hdl_localization.launch"/>
 
-  <!-- 自主导航：move_base（绑定P核4-7，不和NDT抢核）-->
+  <!-- 自主导航：move_base（绑定 P 核 4-7） -->
   <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen"
         launch-prefix="taskset -c 4,5,6,7">
     <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="global_costmap"/>
     <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
-    <rosparam file="$(find jackal_navigation)/params/map_nav_params/local_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find jackal_navigation)/params/map_nav_params/local_costmap_params.yaml"  command="load"/>
     <rosparam file="$(find jackal_navigation)/params/map_nav_params/global_costmap_params.yaml" command="load"/>
     <param name="global_costmap/origin_x"          value="-5.0"/>
     <param name="global_costmap/origin_y"          value="-8.0"/>
-    <param name="global_costmap/width"             value="55.0"/>
-    <param name="global_costmap/height"            value="27.0"/>
-    <!-- global costmap 降频：规划全局路径不需要实时更新，节省CPU -->
+    <param name="global_costmap/width"             value="75.0"/>
+    <param name="global_costmap/height"            value="35.0"/>
     <param name="global_costmap/update_frequency"  value="2.0"/>
     <param name="global_costmap/publish_frequency" value="1.0"/>
     <rosparam file="$(find jackal_navigation)/params/move_base_params.yaml" command="load"/>
     <param name="base_global_planner" value="navfn/NavfnROS"/>
     <param name="base_local_planner"  value="teb_local_planner/TebLocalPlannerROS"/>
     <rosparam file="$(find me5413_world)/config/teb_local_planner_params.yaml" command="load"/>
-    <!-- 降低控制频率，减轻TEB优化的CPU压力 -->
     <param name="controller_frequency" value="10.0"/>
-    <!-- 机器人轮廓传给TEB（Jackal: 0.42m x 0.33m） -->
     <rosparam param="TebLocalPlannerROS/footprint_model/type" subst_value="true">polygon</rosparam>
     <rosparam param="TebLocalPlannerROS/footprint_model/vertices">
       [[-0.21, -0.165], [-0.21, 0.165], [0.21, 0.165], [0.21, -0.165]]
@@ -51,7 +57,7 @@
     <remap from="odom" to="odometry/filtered"/>
   </node>
 
-  <!-- 箱子计数节点（绑定P核8-11，YOLO走GPU，CPU部分隔离） -->
+  <!-- 箱子计数节点（绑定 P 核 8-11，YOLO 走 GPU） -->
   <node name="box_counter_node" pkg="me5413_world" type="box_counter.py" output="screen"
         launch-prefix="taskset -c 8,9,10,11">
     <param name="use_ground_truth"  value="false"/>
@@ -71,6 +77,9 @@
 
   <!-- 一楼巡逻状态机 -->
   <node name="level1_patrol" pkg="me5413_world" type="level1_patrol.py" output="screen"/>
+
+  <!-- 二楼导航状态机（等待 /me5413/level1_done 后启动） -->
+  <node name="auto_navigator" pkg="me5413_world" type="auto_navigator.py" output="screen"/>
 
   <!-- RViz -->
   <node type="rviz" name="rviz" pkg="rviz"
