@@ -27,6 +27,7 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from actionlib_msgs.msg import GoalStatus
 from std_msgs.msg import Bool
 from std_srvs.srv import Empty
+from geometry_msgs.msg import Twist
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -56,7 +57,7 @@ class AutoNavigator:
         # ── 巡逻点（map frame） ───────────────────────────────────────
         self.wp = {
             # 一楼交接点（level1_patrol 最后一个点附近）
-            "leave_level_1": (7.5,  -2.0, -math.pi / 2),
+            "leave_level_1": (7.5,  -2.5, -math.pi / 2),
             # 坡道引导
             "start_slope":   (10.0, -4.0,  0.0),
             "slope1":        (30.0, -3.2,  0.0),
@@ -225,6 +226,46 @@ class AutoNavigator:
             except Exception:
                 pass
 
+    # ── 开环爬坡 ─────────────────────────────────────────────────────
+
+    def _drive_to_slope_exit(self):
+        """
+        开环直行爬坡：发固定 cmd_vel，直到 TF 显示到达坡顶附近（x≥39）才停止。
+        坡道 map x: 10 → ~40，方向约为正东（yaw≈0），直线距离约 30m。
+        速度 0.5m/s，最长跑 90s（sim），到位提前停止。
+        """
+        SLOPE_EXIT_X = 39.0          # 到达此 x 即认为出坡顶
+        VEL_X        = 0.5           # 直行速度 m/s
+        MAX_DURATION = 90.0          # 超时秒数（sim time）
+
+        twist = Twist()
+        twist.linear.x = VEL_X
+
+        rate  = rospy.Rate(10)
+        start = rospy.Time.now()
+        rospy.loginfo('[auto_navigator] 开环爬坡，速度 %.1f m/s，目标 x≥%.0f', VEL_X, SLOPE_EXIT_X)
+
+        while not rospy.is_shutdown():
+            elapsed = (rospy.Time.now() - start).to_sec()
+            if elapsed > MAX_DURATION:
+                rospy.logwarn('[auto_navigator] 爬坡超时 %.0fs，强制停止', MAX_DURATION)
+                break
+
+            try:
+                (trans, _) = self.tf_listener.lookupTransform('map', 'base_link', rospy.Time(0))
+                if trans[0] >= SLOPE_EXIT_X:
+                    rospy.loginfo('[auto_navigator] 到达坡顶 x=%.1f ✓', trans[0])
+                    break
+            except Exception:
+                pass
+
+            self.cmd_pub.publish(twist)
+            rate.sleep()
+
+        # 停车
+        self.cmd_pub.publish(Twist())
+        rospy.sleep(0.5)
+
     # ── 主流程 ────────────────────────────────────────────────────────
 
     def run(self):
@@ -261,10 +302,10 @@ class AutoNavigator:
         self.send_goal(8.5, -3.0, 0.0, early_stop_dist=0.5)   # 穿越点：锥桶正后方
         self.send_goal(*self.wp['start_slope'])                  # 坡道起点
 
-        # ── 阶段2: 爬坡 ──────────────────────────────────────────────
-        rospy.loginfo('[auto_navigator] ===== 阶段2: 坡道 =====')
-        for name in ['slope1', 'slope2', 'slope3', 'slope4', 'end_slope']:
-            self.send_goal(*self.wp[name])
+        # ── 阶段2: 开环爬坡 ───────────────────────────────────────────
+        # 坡道斜面被 Velodyne 标记为障碍，move_base 无法规划，改用开环直行
+        rospy.loginfo('[auto_navigator] ===== 阶段2: 开环爬坡 =====')
+        self._drive_to_slope_exit()
 
         # ── 阶段3: 进入二楼 ──────────────────────────────────────────
         rospy.loginfo('[auto_navigator] ===== 阶段3: 二楼入口 =====')
