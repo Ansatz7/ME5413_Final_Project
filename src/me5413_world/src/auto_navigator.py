@@ -256,7 +256,7 @@ class AutoNavigator:
             rospy.logwarn('[auto_navigator] clear_costmaps 失败: %s', e)
 
         # 锥桶已消失，依次通过各检查点
-        self.send_goal(*self.wp['leave_level_1'])   # (8.0,-3.0) 锥桶后方
+        self.send_goal(*self.wp['leave_level_1'])   # (8.0,-3.5) 锥桶后方
         self.send_goal(*self.wp['start_slope'])     # 坡道起点
 
         # ── 阶段2: 爬坡（move_base 规划） ────────────────────────────
