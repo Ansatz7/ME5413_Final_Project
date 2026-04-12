@@ -56,7 +56,7 @@ class AutoNavigator:
         # ── 巡逻点（map frame） ───────────────────────────────────────
         self.wp = {
             # 一楼交接点（level1_patrol 最后一个点附近）
-            "leave_level_1": (8.0,  -3.0, -math.pi / 2),
+            "leave_level_1": ( 8.0,  -3.5, -math.pi / 2),
             # 坡道引导
             "start_slope":   (10.0, -4.0,  0.0),
             "slope1":        (30.0, -3.2,  0.0),

@@ -107,7 +107,7 @@ class QuickNav:
 
         # 到交接点
         # self._go(3.5, 1.0,  90, '入口')
-        self._go(7.5, -1.5, -90, 'leave_level_1')
+        self._go(7.5, -1.8, -90, 'leave_level_1')
 
         # 只发 level1_done，/cmd_unblock 由 auto_navigator 负责
         # （auto_navigator 会在紧邻锥桶时再发，确保10s内通过）
