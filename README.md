@@ -1,219 +1,529 @@
-# ME5413_Final_Project
+# ME5413 Final Project — Autonomous Two-Floor Navigation
 
 NUS ME5413 Autonomous Mobile Robotics Final Project AY25/26
-> Authors: [Christina](https://github.com/ldaowen), [Ziggy](https://github.com/ziggyhuang), [Dongen](https://github.com/nuslde), and [Shuo](https://github.com/SS47816)
 
 ![Ubuntu 20.04](https://img.shields.io/badge/OS-Ubuntu_20.04-informational?style=flat&logo=ubuntu&logoColor=white&color=2bbc8a)
 ![ROS Noetic](https://img.shields.io/badge/Tools-ROS_Noetic-informational?style=flat&logo=ROS&logoColor=white&color=2bbc8a)
-![C++](https://img.shields.io/badge/Code-C++-informational?style=flat&logo=c%2B%2B&logoColor=white&color=2bbc8a)
 ![Python](https://img.shields.io/badge/Code-Python-informational?style=flat&logo=Python&logoColor=white&color=2bbc8a)
-![GitHub Repo stars](https://img.shields.io/github/stars/NUS-Advanced-Robotics-Centre/ME5413_Final_Project?color=FFE333)
-![GitHub Repo forks](https://img.shields.io/github/forks/NUS-Advanced-Robotics-Centre/ME5413_Final_Project?color=FFE333)
+![C++](https://img.shields.io/badge/Code-C++-informational?style=flat&logo=c%2B%2B&logoColor=white&color=2bbc8a)
 
 ![cover_image](src/me5413_world/media/overview2526.png)
 
+## Overview
+
+A fully autonomous navigation system for a Jackal UGV completing a two-floor mission in Gazebo:
+
+1. **Level 1 — Patrol & Count**: Autonomously patrol two rooms, count numbered boxes (1–9) using a custom YOLOv8 detector fused with 3D LiDAR depth.
+2. **Ramp Traversal**: Exit Level 1, traverse a ramp to Level 2.
+3. **Level 2 — Obstacle Avoidance & Final Positioning**: Select the passable exit (random cone placement), cruise the corridor scanning for target boxes, avoid a dynamic moving obstacle, and stop at the room containing the box number with the **fewest occurrences** from Level 1.
+
+**Stack**: ROS Noetic · Gazebo 11 · `move_base` + TEB · `hdl_localization` (3D NDT) · YOLOv8
+
+---
+
+## Table of Contents
+
+- [Repository Structure](#repository-structure)
+- [Dependencies](#dependencies)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Launch File Reference](#launch-file-reference)
+- [System Architecture](#system-architecture)
+  - [Node Graph](#node-graph)
+  - [Coordinate System](#coordinate-system)
+  - [Mission State Machine](#mission-state-machine)
+- [Component Details](#component-details)
+- [Configuration](#configuration)
+- [Development & Testing Workflow](#development--testing-workflow)
+- [License](#license)
+
+---
+
+## Repository Structure
+
+```
+ME5413_Final_Project/
+├── src/
+│   ├── me5413_world/                  # Main package
+│   │   ├── launch/                    # All launch files
+│   │   │   ├── world.launch           # Gazebo world + robot spawn (run this first)
+│   │   │   ├── full_mission.launch    # ★ Complete autonomous mission
+│   │   │   ├── level1_patrol.launch   # Level 1 patrol only
+│   │   │   ├── level1_quick_check.launch  # Dev: skip to L1→L2 handoff
+│   │   │   ├── level2_quick_check.launch  # Dev: teleport to L2, test L2 logic
+│   │   │   ├── mapping.launch         # GMapping SLAM (for remapping)
+│   │   │   ├── fast_lio_mapping.launch    # FAST-LIO SLAM (alternative)
+│   │   │   ├── navigation.launch      # AMCL navigation (baseline)
+│   │   │   ├── manual.launch          # Keyboard teleoperation
+│   │   │   └── manual_yolo.launch     # Keyboard + YOLO debug view
+│   │   ├── src/                       # Python nodes
+│   │   │   ├── level1_patrol.py       # Level 1 autonomous patrol FSM
+│   │   │   ├── auto_navigator.py      # Level 2 navigation FSM (main brain)
+│   │   │   ├── box_counter.py         # YOLOv8 detection + 3D counting
+│   │   │   ├── level1_quick_nav.py    # Dev: fast L1→L2 transition
+│   │   │   ├── level2_quick_nav.py    # Dev: teleport to L2
+│   │   │   └── object_spawner_gz_plugin.cpp  # Gazebo plugin: spawn cones/boxes
+│   │   ├── config/
+│   │   │   ├── costmap_common_params.yaml     # Obstacle/inflation layers
+│   │   │   └── teb_local_planner_params.yaml  # TEB velocity/tolerance tuning
+│   │   ├── maps/
+│   │   │   ├── me5413_2d_map.pgm / .yaml      # 2D occupancy grid (0.05 m/px)
+│   │   │   └── map_for_loc.pcd                # 3D point cloud for NDT localization
+│   │   ├── models/
+│   │   │   ├── number1/ … number9/            # Textured numbered box models
+│   │   │   ├── box_detector.pt                # YOLOv8 trained weights (6.2 MB)
+│   │   │   └── …                              # Bridge, buildings, cylinders
+│   │   ├── worlds/
+│   │   │   └── me5413_project_2526.world      # Gazebo SDF world definition
+│   │   └── rviz/
+│   │       └── hdl_locolization.rviz          # RViz display config
+│   │
+│   ├── interactive_tools/             # Custom RViz panel (respawn, goal)
+│   ├── jackal_description/            # Modified Jackal URDF with custom sensors
+│   ├── hdl_localization/              # 3D NDT localization (hdl_graph_slam)
+│   ├── hdl_global_localization/       # Global localization service
+│   ├── ndt_omp/                       # OpenMP-accelerated NDT
+│   ├── fast_gicp/                     # Fast GICP point cloud registration
+│   └── FAST_LIO_SLAM/                 # LiDAR-inertial odometry (optional SLAM)
+```
+
+---
+
 ## Dependencies
 
-* System Requirements:
-  * Ubuntu 20.04 (18.04 not yet tested)
-  * ROS Noetic (Melodic not yet tested)
-  * C++11 and above
-  * CMake: 3.0.2 and above
-* This repo depends on the following standard ROS pkgs:
-  * `roscpp`
-  * `rospy`
-  * `rviz`
-  * `std_msgs`
-  * `nav_msgs`
-  * `geometry_msgs`
-  * `visualization_msgs`
-  * `tf2`
-  * `tf2_ros`
-  * `tf2_geometry_msgs`
-  * `pluginlib`
-  * `map_server`
-  * `gazebo_ros`
-  * `jsk_rviz_plugins`
-  * `jackal_gazebo`
-  * `jackal_navigation`
-  * `velodyne_simulator`
-  * `teleop_twist_keyboard`
-* And this [gazebo_model](https://github.com/osrf/gazebo_models) repositiory
+**System requirements:**
+- Ubuntu 20.04
+- ROS Noetic
+- Python 3.8+, C++11+, CMake ≥ 3.0.2
+- NVIDIA GPU recommended for real-time YOLOv8 inference
+
+**ROS packages** (installed via `rosdep`):
+- `move_base`, `navfn`, `teb_local_planner`
+- `map_server`, `amcl`
+- `roscpp`, `rospy`, `tf2`, `tf2_ros`, `tf2_geometry_msgs`
+- `std_msgs`, `nav_msgs`, `geometry_msgs`, `sensor_msgs`, `visualization_msgs`
+- `gazebo_ros`, `gazebo_plugins`
+- `jackal_gazebo`, `jackal_navigation`, `jackal_control`
+- `velodyne_simulator`, `pointcloud_to_laserscan`
+- `rviz`, `jsk_rviz_plugins`
+- `teleop_twist_keyboard`
+- `pcl_ros`
+
+**Python packages:**
+```bash
+pip install ultralytics opencv-python numpy
+```
+
+---
 
 ## Installation
 
-This repo is a ros workspace, containing three rospkgs:
-
-* `interactive_tools` are customized tools to interact with gazebo and your robot
-* `jackal_description` contains the modified jackal robot model descriptions
-* `me5413_world` the main pkg containing the gazebo world, and the launch files
-
-**Note:** If you are working on this project, it is encouraged to fork this repository and work on your own fork!
-
-After forking this repo to your own github:
-
 ```bash
-# Clone your own fork of this repo (assuming home here `~/`)
-cd
-git clone https://github.com/<YOUR_GITHUB_USERNAME>/ME5413_Final_Project.git
+# 1. Clone the repository
+git clone https://github.com/Ansatz7/ME5413_Final_Project.git
 cd ME5413_Final_Project
 
-# Install all dependencies
+# 2. Install ROS dependencies
 rosdep install --from-paths src --ignore-src -r -y
 
-# Sometimes there might be missing dependencies such as sensor drivers for the simulation, if needed run the following to install (Thanks Zewen)
-sudo apt install -y ros-noetic-sick-tim ros-noetic-lms1xx ros-noetic-velodyne-description ros-noetic-pointgrey-camera-description ros-noetic-jackal-control
+# 3. Install any missing sensor drivers
+sudo apt install -y \
+  ros-noetic-sick-tim \
+  ros-noetic-lms1xx \
+  ros-noetic-velodyne-description \
+  ros-noetic-pointgrey-camera-description \
+  ros-noetic-jackal-control
 
-# Build
+# 4. Build the workspace
 catkin_make
-# Source 
 source devel/setup.bash
+
+# 5. Install Gazebo models
+mkdir -p ~/.gazebo/models
+
+# Official Gazebo model library
+git clone https://github.com/osrf/gazebo_models.git ~/gazebo_models
+cp -r ~/gazebo_models/* ~/.gazebo/models/
+
+# Our custom models (numbered boxes, bridge, etc.)
+cp -r ~/ME5413_Final_Project/src/me5413_world/models/* ~/.gazebo/models/
 ```
 
-To properly load the gazebo world, you will need to have the necessary model files in the `~/.gazebo/models/` directory.
+> **Tip**: Add `source ~/ME5413_Final_Project/devel/setup.bash` to your `~/.bashrc` so you don't need to source it every terminal session.
 
-There are two sources of models needed:
+---
 
-* [Gazebo official models](https://github.com/osrf/gazebo_models)
-  
-  ```bash
-  # Create the destination directory
-  cd
-  mkdir -p .gazebo/models
+## Quick Start
 
-  # Clone the official gazebo models repo (assuming home here `~/`)
-  git clone https://github.com/osrf/gazebo_models.git
-
-  # Copy the models into the `~/.gazebo/models` directory
-  cp -r ~/gazebo_models/* ~/.gazebo/models
-  ```
-
-* [Our customized models](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project/tree/main/src/me5413_world/models)
-
-  ```bash
-  # Copy the customized models into the `~/.gazebo/models` directory
-  cp -r ~/ME5413_Final_Project/src/me5413_world/models/* ~/.gazebo/models
-  ```
-
-## Usage
-
-### 0. Gazebo World
-
-This command will launch the gazebo with the project world
+Every run requires two terminals. Terminal 1 stays open for the entire session.
 
 ```bash
-# Launch Gazebo World together with our robot
+# Terminal 1 — Gazebo simulation world (keep this running)
 roslaunch me5413_world world.launch
+
+# Terminal 2 — Full autonomous mission
+roslaunch me5413_world full_mission.launch
 ```
 
-### 1. Manual Control
+The robot will:
+1. Respawn all numbered boxes (8 s wait)
+2. Patrol Level 1 — Room A → Room B → handoff point (~3–5 min)
+3. Publish `/cmd_unblock` to open the exit gate, then traverse the ramp
+4. Select the unobstructed exit on Level 2 via LiDAR scan
+5. Cruise the Level 2 corridor, identify the target box number via YOLO
+6. Avoid the dynamic moving obstacle, then stop at the correct room
 
-If you wish to explore the gazebo world a bit, we provide you a way to manually control the robot around:
+---
 
-```bash
-# Only launch the robot keyboard teleop control
-roslaunch me5413_world manual.launch
+## Launch File Reference
+
+| Launch File | Purpose | Notes |
+|---|---|---|
+| `world.launch` | Gazebo simulation + robot spawn | Always run first |
+| `full_mission.launch` | **Complete mission** (L1 patrol → ramp → L2 nav) | Primary launch |
+| `level1_patrol.launch` | Level 1 patrol + box counting only | No L2 |
+| `level1_quick_check.launch` | Skip patrol, run 2-point nav to handoff, trigger L2 | Dev / fast iteration |
+| `level2_quick_check.launch` | Teleport directly to Level 2, start from exit selection | Dev / L2 testing |
+| `mapping.launch` | GMapping SLAM for remapping | Use with `manual.launch` |
+| `fast_lio_mapping.launch` | FAST-LIO LiDAR-inertial SLAM | Higher accuracy mapping |
+| `navigation.launch` | AMCL navigation (2D baseline) | Not used in final mission |
+| `manual.launch` | Keyboard teleoperation | Exploration / debug |
+| `manual_yolo.launch` | Keyboard + YOLO debug image stream | Tune detection |
+
+---
+
+## System Architecture
+
+### Node Graph
+
+```
+                     ┌─────────────────────────────────────────────────────┐
+                     │                   world.launch                      │
+                     │  Gazebo ──► /mid/points  /front/scan  /right/image  │
+                     └────────────────────┬────────────────────────────────┘
+                                          │
+                     ┌────────────────────▼────────────────────────────────┐
+                     │                full_mission.launch                  │
+                     │                                                     │
+  /mid/points ──────►│ velodyne_z_filter ──► /mid/points_filtered          │
+                     │        │                      │                     │
+                     │        ▼                      ▼                     │
+                     │ hdl_localization         move_base                  │
+                     │  (3D NDT)             (TEB local planner)           │
+                     │  /tf (map→odom)        /move_base/goal              │
+                     │        │                      │                     │
+  /right/image ─────►│  box_counter.py ─────────────┤                     │
+  /mid/points ──────►│  (YOLOv8 + depth)             │                     │
+                     │  /me5413/box_count             │                     │
+                     │  /me5413/yolo_raw              │                     │
+                     │  /me5413/debug_image           │                     │
+                     │        │                      │                     │
+                     │        ▼                      │                     │
+                     │  level1_patrol.py ────────────┤                     │
+                     │  (waypoint FSM)               │                     │
+                     │  /me5413/level1_done ─────────┤                     │
+                     │  /cmd_unblock                 │                     │
+                     │                               │                     │
+                     │  auto_navigator.py ───────────┘                     │
+                     │  (L2 FSM, waits for level1_done)                    │
+                     └─────────────────────────────────────────────────────┘
 ```
 
-**Note:** This robot keyboard teleop control is also included in all other launch files, so you don't need to launch this when you do mapping or navigation.
+### Coordinate System
 
-![rviz_manual_image](src/me5413_world/media/rviz_manual.png)
+The Gazebo world origin is offset from the ROS `map` frame origin:
 
-### 2. Mapping (Naive Version)
+```
+map_coord = gazebo_coord + (22.5, 7.5)
+```
 
-After launching **Step 0**, in the second terminal:
+| Location | Gazebo (x, y) | Map (x, y) |
+|---|---|---|
+| Robot spawn | (−22.5, −7.5) | (0, 0) |
+| Level 1 Room A | — | x ∈ [4, 10], y ∈ [0, 15] |
+| Level 1 Room B | — | x ∈ [14, 21], y ∈ [0, 15] |
+| Ramp start | — | (10, −4) |
+| Ramp end / L2 entry | — | (40.5, −3.3) |
+| Level 2 corridor | — | x ∈ [26, 40], y ∈ [0, 15] |
+| Level 2 exit wall | — | x ≈ 33.5 |
+
+**Angular convention**: 0 = East, π/2 = North, π/−π = West, −π/2 = South (ROS standard).
+
+**TF frame tree:**
+```
+world → map → odom → base_link → velodyne (3D LiDAR)
+                                → front_laser (2D scan)
+                                → camera_right
+```
+
+### Mission State Machine
+
+```
+                         [level1_done signal]
+                                │
+   START ──► L1 Patrol (13 wp) ─┤──► /cmd_unblock ──► Ramp climb
+                                │
+                         [level2_start signal]  ← (level2_quick_nav bypass)
+                                │
+                     ┌──────────▼──────────┐
+                     │   Stage 4           │
+                     │   Exit Selection    │
+                     │  decision_point_1   │
+                     │  left LiDAR ratio   │
+                     │  < 5% → exit 1      │
+                     │  ~30% → exit 2      │
+                     └──────────┬──────────┘
+                                │
+                     ┌──────────▼──────────┐
+                     │   Stage 5           │
+                     │   Corridor YOLO     │
+                     │  x=29.3, 4 stops    │
+                     │  match target digit │
+                     └──────────┬──────────┘
+                                │
+                     ┌──────────▼──────────┐
+                     │   Stage 6           │
+                     │   Dynamic Obstacle  │
+                     │  wait for min dist  │
+                     │  then enter room    │
+                     └─────────────────────┘
+```
+
+---
+
+## Component Details
+
+### `level1_patrol.py` — Level 1 Patrol FSM
+
+Navigates the robot through 13 waypoints covering Room A and Room B, then signals completion.
+
+**Key behaviours:**
+- Respawns numbered boxes at startup (waits 8 s for Gazebo to settle)
+- Uses `move_base` SimpleActionClient with `early_stop_dist=0.4 m` for smooth corner turns
+- Publishes `/me5413/level1_done` (`std_msgs/Bool`) at the handoff point
+- Publishes `/cmd_unblock` (`std_msgs/Bool`) to remove the exit cone (10-second window)
+- Visualises all waypoints as labelled spheres+arrows on `/patrol_waypoints`
+
+**Patrol route (map frame):**
+
+| # | Position (x, y) | Heading | Area |
+|---|---|---|---|
+| 0 | (3.5, 1.0) | North | Entry |
+| 1 | (4.0, 16.0) | East | Room A upper-left |
+| 2 | (11.5, 15.5) | South | Room A upper-right |
+| 3 | (11.5, 7.5) | South | Room A mid-right |
+| 4 | (13.0, 2.0) | NE | Corridor |
+| 5 | (14.0, 16.0) | East | Room B upper-left |
+| 6 | (21.0, 15.5) | South | Room B upper-right |
+| 7 | (21.0, 1.0) | South | Room B lower-right |
+| 8 | (19.0, −1.0) | West | Room B bottom |
+| 9 | (13.5, −0.5) | North | Room B lower-left |
+| 10 | (13.5, 7.5) | North | Room B mid |
+| 11 | (12.0, 13.0) | SW | Corridor return |
+| 12 | (11.0, −1.0) | West | Room A lower-right |
+| **13** | **(8.0, −3.5)** | **South** | **Handoff / leave_level_1** |
+
+---
+
+### `box_counter.py` — YOLOv8 Detection & 3D Counting
+
+Detects numbered boxes (1–9) from the right camera, associates detections with 3D positions from the Velodyne point cloud, and maintains a deduplicated count per digit.
+
+**Inputs:**
+- `/right/image_raw` — camera image (640×480)
+- `/mid/points` — Velodyne 16-line 3D point cloud
+
+**Outputs:**
+- `/me5413/box_count` (`String`, JSON) — `{"1": 2, "3": 1, …}` running totals
+- `/me5413/yolo_raw` (`String`, JSON) — digits seen in the current frame (no dedup)
+- `/me5413/debug_image` — annotated image with bounding boxes, distance, and raw detections
+- `/me5413/box_markers` — RViz MarkerArray with box positions and counts
+
+**Detection pipeline:**
+```
+Camera frame
+    │
+    ▼ YOLOv8 inference (box_detector.pt, conf ≥ 0.9)
+Bounding boxes (class = digit 1–9)
+    │
+    ▼ Depth association (Velodyne horizontal angle → point cloud column)
+3D position (map frame, via TF)
+    │
+    ▼ Deduplication (DBSCAN clustering)
+      same digit: merge if within 1.2 m
+      any digit:  reject if within 0.4 m of existing detection
+    │
+    ▼ Confirmation (min 2 observations, ≥ 0.5 m apart)
+Confirmed count entry
+```
+
+**Key parameters (configurable in launch):**
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `min_conf` | 0.9 | YOLO confidence threshold |
+| `min_obs` | 2 | Observations required before recording |
+| `min_obs_dist` | 0.5 m | Min travel distance between observations |
+| `dedup_same_digit` | 1.2 m | Merge radius for same digit |
+| `dedup_any_digit` | 0.4 m | Reject radius for any digit (duplicate suppression) |
+| `continuous_hz` | 2.0 Hz | Timed sampling rate |
+| `move_dist_min` | 0.3 m | Spatial sampling interval |
+
+---
+
+### `auto_navigator.py` — Level 2 Navigation FSM
+
+Waits for the Level 1 done signal, then executes a 6-stage state machine for Level 2.
+
+**Subscriptions:**
+- `/me5413/level1_done` — triggers start of ramp + L2 sequence
+- `/me5413/level2_start` — alternative trigger (teleport test mode, skips stages 1–3)
+- `/me5413/box_count` — real-time count updates (snapshots at L1 done)
+- `/me5413/yolo_raw` — per-frame YOLO detections for corridor scanning
+- `/front/scan` — 2D LiDAR for exit occupancy detection
+- `/odometry/filtered` — velocity for stop detection
+
+**Stages:**
+
+| Stage | Description | Key method |
+|---|---|---|
+| 1 | Wait for `/me5413/level1_done` | — |
+| 2 | Navigate to ramp entrance, publish `/cmd_unblock` | `send_goal` |
+| 3 | Climb ramp (4 intermediate waypoints) | `send_goal` ×4 |
+| **4** | **Exit selection** — face North, sample left-side (75–105°) LiDAR occupancy ratio; stable ratio < 5% → passable, ~30% → blocked | `_navigate_and_detect_exit` |
+| **5** | **Corridor YOLO scan** — cruise x=29.3 corridor southward, sample `/me5413/yolo_raw` 2 s per stop | `_scan_corridor_for_target` |
+| **6** | **Dynamic obstacle avoidance** — monitor right-side (−120° to −60°) LiDAR; wait for obstacle to pass its closest point then enter room | `_wait_obstacle_min_then_enter` |
+
+**Exit detection detail (Stage 4):**
+
+The robot stops at `decision_point_1` facing North (π/2). The left side (75–105°) points toward the exit. `_left_ratio()` counts the fraction of rays within 3 m:
+
+- Sliding window of 5 samples, stable when max−min < 10%
+- Mean < 5%  → exit is **open** (no cone)
+- Mean 5–80% → exit is **blocked** (cone present), switch to exit 2
+- Mean ≥ 80% → still scanning (wall, keep sampling)
+
+**Dynamic obstacle avoidance detail (Stage 6):**
+
+The robot parks at the corridor waypoint facing South (−π/2). The moving red cylinder travels along the east-west axis. Right-side laser (−120° to −60°) watches the approach:
+
+```
+State "waiting"    : obstacle > 3.0 m, do nothing
+State "approaching": obstacle enters 3.0 m circle
+                     → record min distance each tick
+Break condition    : current_range > prev_min + 0.05 m
+                     → obstacle has just passed the nearest point → go now
+```
+
+---
+
+### `level1_quick_nav.py` — Fast L1→L2 Test Utility
+
+Used by `level1_quick_check.launch`. Navigates directly to the handoff point (2 waypoints), then publishes a fake `box_count` + `/me5413/level1_done` to hand off to `auto_navigator` immediately. Useful for testing L2 logic without waiting for the full Level 1 patrol.
+
+---
+
+### `level2_quick_nav.py` — Level 2 Teleport Test Utility
+
+Used by `level2_quick_check.launch`. Teleports the robot to Level 2 via `/gazebo/set_model_state`, publishes `/initialpose` (with correct z=2.6 for L2 floor height) three times to converge `hdl_localization`, waits 10 s, then fires `/me5413/level2_start`. This lets you test exit selection, YOLO corridor scanning, and dynamic obstacle avoidance in isolation.
+
+---
+
+## Configuration
+
+### Costmap — `config/costmap_common_params.yaml`
+
+| Parameter | Value | Notes |
+|---|---|---|
+| Sensor topic | `/mid/points_filtered` | z-filtered point cloud |
+| `obstacle_range` | 2.0 m | Mark obstacles within this range |
+| `raytrace_range` | 3.0 m | Clear free space up to this range |
+| `inflation_radius` | 0.20 m | Safety margin around obstacles |
+| `min/max_obstacle_height` | −100 / 100 m | Accept all heights (z-filter handles range) |
+| `origin_z` | −1.0 m | Voxel layer base |
+| `z_voxels` | 110 | Voxel layer height (covers both floors) |
+
+### Local Planner — `config/teb_local_planner_params.yaml`
+
+| Parameter | Value | Notes |
+|---|---|---|
+| `max_vel_x` | 0.6 m/s | Forward speed |
+| `max_vel_x_backwards` | 0.2 m/s | |
+| `max_vel_theta` | 1.0 rad/s | Rotation speed |
+| `xy_goal_tolerance` | 0.3 m | Position tolerance |
+| `yaw_goal_tolerance` | 2.5 rad | Effectively relaxed (robot turns after arriving) |
+| `min_obstacle_dist` | 0.22 m | Footprint + small margin |
+| `enable_homotopy_class_planning` | false | Disabled to reduce CPU load |
+
+### Point Cloud Z-Filter (in launch files)
+
+Velodyne point cloud is filtered to z ∈ [0.2, 2.0] m (sensor frame) before being fed to `hdl_localization` and `move_base`. This removes ground returns and ceiling noise, which is essential on Level 2 where the robot is elevated and raw z-values would confuse a non-filtered costmap.
+
+---
+
+## Development & Testing Workflow
+
+### Testing Level 2 only (fastest iteration)
 
 ```bash
-# Launch GMapping
+# Terminal 1
+roslaunch me5413_world world.launch
+
+# Terminal 2 — teleports to L2, runs exit selection + YOLO + obstacle avoidance
+roslaunch me5413_world level2_quick_check.launch
+```
+
+### Testing Level 1 → Level 2 handoff (medium speed)
+
+```bash
+# Terminal 1
+roslaunch me5413_world world.launch
+
+# Terminal 2 — 2-point nav to handoff, then triggers full L2 sequence
+roslaunch me5413_world level1_quick_check.launch
+```
+
+### Full mission end-to-end
+
+```bash
+# Terminal 1
+roslaunch me5413_world world.launch
+
+# Terminal 2
+roslaunch me5413_world full_mission.launch
+```
+
+### Monitoring during a run
+
+| Topic | What it shows |
+|---|---|
+| `/me5413/debug_image` | Live camera with YOLO bounding boxes, distance, and raw detections |
+| `/me5413/box_count` | Running count JSON — useful to `rostopic echo` |
+| `/auto_waypoints` | All L2 navigation waypoints in RViz (MarkerArray) |
+| `/patrol_waypoints` | All L1 waypoints in RViz (MarkerArray) |
+| `/me5413/box_markers` | Detected box positions in RViz |
+| `/move_base/local_costmap/costmap` | Live local costmap (good for debugging obstacle avoidance) |
+
+### Remapping
+
+The pre-built maps (`me5413_2d_map.pgm` and `map_for_loc.pcd`) should work as-is. If you need to remap:
+
+```bash
+# GMapping (2D)
 roslaunch me5413_world mapping.launch
-```
-
-After finishing mapping, run the following command in the thrid terminal to save the map:
-
-```bash
-# Save the map as `my_map` in the `maps/` folder
+# Drive the robot manually, then:
 roscd me5413_world/maps/
 rosrun map_server map_saver -f my_map map:=/map
+
+# FAST-LIO (3D, higher accuracy)
+roslaunch me5413_world fast_lio_mapping.launch
 ```
 
-![rviz_nmapping_image](src/me5413_world/media/rviz_mapping.png)
-
-### 3. Navigation (Incomplete Version)
-
-Once completed **Step 2** mapping and saved your map, quit the mapping process.
-
-Then, in the second terminal:
-
-```bash
-# Load a map and launch AMCL localizer
-roslaunch me5413_world navigation.launch
-```
-
-![rviz_navigation_image](src/me5413_world/media/rviz_navigation.png)
-
-## Student Tasks
-
-### 1. Map the environment
-
-* You may modify your Jackal robot to use other sensors, but please be realistic (i.e. no camera in the sky, subscribing to gazebo "ground truths")
-* Also in the context of ME5413, please keep to the Jackal base robot (i.e. no drones, humanoids, robot dog...)
-* You may use any SLAM algorithm you like, with any type of sensors:
-  * 2D LiDAR(s)
-  * 3D LiDAR(s)
-  * Vision Sensor(s)
-  * IMU(s)
-  * Fused Multi-sensors
-  * And any other combination...
-* You may operate the robot manually for mapping
-* You may want to remove all the moving/random objects in the environment by using the panel and/or commenting out some code in the launch file
-* We have provided you a GUI in RVIZ that allows you to click and generate/clear the random objects in the gazebo world:
-  ![rviz_panel_image](src/me5413_world/media/control_panel.png)
-* You may want to use tools like [EVO](https://github.com/MichaelGrupp/evo) to quantitatively evaluate the performance of your SLAM algorithm.
-* Verify your SLAM accuracy by comparing your odometry with the published `/gazebo/ground_truth/state` topic (`nav_msgs::Odometry`), which contains the ground truth odometry of the robot.
-
-### 2. Using your own map, autonomously navigate your robot to complete the tasks
-
-  ![task_image](src/me5413_world/media/overview2526.png)
-
-* Please ensure the objects have been successfully generated at the start of each run
-* On the lower floor, count the number of occurance of each type of numbered box (e.g. box 1, 2, 3, 4, the box numbers are randomly generated)
-* Unblock the exit from the lower level by publishing a `true` message (`std_msgs/Bool`) to the `/cmd_unblock` topic to remove the orange barrel
-  * Note that the exit can only be unblocked once and the unblocked time lasts for 10s
-* Exit the lower level
-* Go up the ramp to the upper level
-* Navigate past the first two corridors
-* At the wall with the two gaps, an orange traffic cone will be randomly placed in one of them closing the entrance, use the other door to navigate into the upper floor main room
-* Avoid the simulated person (represented by the moving red cylinder) 
-* Finally, stop the Jackal in the room containing the numbered box with the least number of occurance
-* Please do not use any of the ground truth topics such as `/gazebo/ground_truth/state` or `/box_odom`
-
-### 3. Submission (12 April 2026, 2359 HRS)
-
-Please submit the following for the project:
-  * Code to be submitted via your own Github repo link (Please make the repo public during submission)
-  * Demo Video of your robot completing the tasks autonomously in a single run
-  * Generated map files
-  * Presentation (10 minutes), live demo of your robot (5 minutes), Q&A (3 minutes)
-    * Please note that we will use the submitted presentation slides during the in-person presentation on 17 April
-  * Report of max 10 pages (Please be concise)
-  * In your report and presentation, please cover the following:
-    * Perception, mapping & localization, navigation solutions
-    * Challenge(s) faced and how you overcame them
-  * Interesting ways to solve the challenges and well documented Github commits will be much appreciated by the TAs
-  * Also there is a hidden "5413" in the simulation, kudos to those who managed to map it in as well!
-
-## Contribution
-
-If you managed to find any bugs, you are welcome to contribute to this repo by opening a pull-request
-
-If you require any clarifications on the task or to operate the simulation, please raise them on Canvas
-
-We are following (as much as possible):
-
-* [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html),
-* [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#main),
-* [ROS C++ Style Guide](http://wiki.ros.org/CppStyleGuide)
+---
 
 ## License
 
-The [ME5413_Final_Project](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project) is released under the [MIT License](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project/blob/main/LICENSE)
+Released under the [MIT License](LICENSE).
+
+Original project template by [NUS Advanced Robotics Centre](https://github.com/NUS-Advanced-Robotics-Centre/ME5413_Final_Project).  
+Full autonomous mission implementation by the AY25/26 team.
