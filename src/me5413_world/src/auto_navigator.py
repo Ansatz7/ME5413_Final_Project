@@ -27,6 +27,7 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from actionlib_msgs.msg import GoalStatus
 from std_msgs.msg import Bool
 from std_srvs.srv import Empty
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class AutoNavigator:
@@ -42,6 +43,8 @@ class AutoNavigator:
         # ── 发布器 ────────────────────────────────────────────────────
         self.unblock_pub = rospy.Publisher(
             '/cmd_unblock', Bool, queue_size=1, latch=True)
+        self.pub_markers = rospy.Publisher(
+            '/auto_waypoints', MarkerArray, queue_size=1, latch=True)
 
         # ── TF ───────────────────────────────────────────────────────
         self.tf_listener = tf.TransformListener()
@@ -83,6 +86,99 @@ class AutoNavigator:
             (26.0,  4.5, math.pi),
             (26.0,  0.0, math.pi),
         ]
+
+    # ── 可视化 ───────────────────────────────────────────────────────
+
+    def _publish_markers(self):
+        """把所有导航点发布为 MarkerArray，在 RViz 中显示。"""
+        # 收集所有点：(x, y, yaw_rad, 标签, 颜色rgb)
+        entries = []
+        color_map = {
+            'level1': (0.2, 0.6, 1.0),   # 蓝：一楼出口区
+            'slope':  (1.0, 0.6, 0.1),   # 橙：坡道
+            'level2': (0.2, 0.9, 0.2),   # 绿：二楼
+            'exit':   (1.0, 0.2, 0.8),   # 紫：出口选择
+            'end':    (1.0, 0.2, 0.2),   # 红：终点
+        }
+
+        named = [
+            ('leave_level_1', 'level1'),
+            ('start_slope',   'slope'),
+            ('slope1',        'slope'),
+            ('slope2',        'slope'),
+            ('slope3',        'slope'),
+            ('slope4',        'slope'),
+            ('end_slope',     'slope'),
+            ('level_2_1',     'level2'),
+            ('level_2_2',     'level2'),
+            ('l2_exit1',      'exit'),
+            ('l2_exit2',      'exit'),
+        ]
+        for name, ctype in named:
+            x, y, yaw = self.wp[name]
+            entries.append((x, y, yaw, name, color_map[ctype]))
+
+        for i, pt in enumerate(self.corridor_points):
+            entries.append((pt[0], pt[1], pt[2], f'corridor_{i}', color_map['level2']))
+
+        for i, pt in enumerate(self.end_points):
+            col = color_map['end'] if i == len(self.end_points)-1 else color_map['level2']
+            entries.append((pt[0], pt[1], pt[2], f'end_{i}', col))
+
+        array = MarkerArray()
+        stamp = rospy.Time.now()
+        mid = 0
+
+        for (x, y, yaw, label, (r, g, b)) in entries:
+            # 球
+            s = Marker()
+            s.header.frame_id = 'map'
+            s.header.stamp = stamp
+            s.ns, s.id = 'auto_sphere', mid
+            s.type = Marker.SPHERE
+            s.action = Marker.ADD
+            s.pose.position.x, s.pose.position.y, s.pose.position.z = x, y, 0.3
+            s.pose.orientation.w = 1.0
+            s.scale.x = s.scale.y = s.scale.z = 0.35
+            s.color.r, s.color.g, s.color.b, s.color.a = r, g, b, 0.85
+            s.lifetime = rospy.Duration(0)
+            array.markers.append(s)
+            mid += 1
+
+            # 箭头
+            a = Marker()
+            a.header.frame_id = 'map'
+            a.header.stamp = stamp
+            a.ns, a.id = 'auto_arrow', mid
+            a.type = Marker.ARROW
+            a.action = Marker.ADD
+            a.pose.position.x, a.pose.position.y, a.pose.position.z = x, y, 0.3
+            a.pose.orientation.z = math.sin(yaw / 2)
+            a.pose.orientation.w = math.cos(yaw / 2)
+            a.scale.x, a.scale.y, a.scale.z = 0.6, 0.08, 0.08
+            a.color.r, a.color.g, a.color.b, a.color.a = 1.0, 0.9, 0.0, 0.9
+            a.lifetime = rospy.Duration(0)
+            array.markers.append(a)
+            mid += 1
+
+            # 文字
+            t = Marker()
+            t.header.frame_id = 'map'
+            t.header.stamp = stamp
+            t.ns, t.id = 'auto_text', mid
+            t.type = Marker.TEXT_VIEW_FACING
+            t.action = Marker.ADD
+            t.pose.position.x, t.pose.position.y, t.pose.position.z = x, y, 0.75
+            t.pose.orientation.w = 1.0
+            t.scale.z = 0.35
+            t.color.r = t.color.g = t.color.b = t.color.a = 1.0
+            t.text = f'{label}\n({x:.1f},{y:.1f})'
+            t.lifetime = rospy.Duration(0)
+            array.markers.append(t)
+            mid += 1
+
+        self.pub_markers.publish(array)
+        rospy.loginfo('[auto_navigator] 导航点已发布到 /auto_waypoints')
 
     # ── 回调 ─────────────────────────────────────────────────────────
 
@@ -132,6 +228,9 @@ class AutoNavigator:
     # ── 主流程 ────────────────────────────────────────────────────────
 
     def run(self):
+        # ── 发布导航点可视化 ──────────────────────────────────────────
+        self._publish_markers()
+
         # ── 等待一楼完成 ──────────────────────────────────────────────
         rospy.loginfo('[auto_navigator] 等待 /me5413/level1_done ...')
         rate = rospy.Rate(5)
