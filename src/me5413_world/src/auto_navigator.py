@@ -56,7 +56,7 @@ class AutoNavigator:
         # ── 巡逻点（map frame） ───────────────────────────────────────
         self.wp = {
             # 一楼交接点（level1_patrol 最后一个点附近）
-            "leave_level_1": (7.5,  -2.5, -math.pi / 2),
+            "leave_level_1": (8.0,  -3.0, -math.pi / 2),
             # 坡道引导
             "start_slope":   (10.0, -4.0,  0.0),
             "slope1":        (30.0, -3.2,  0.0),
@@ -256,9 +256,8 @@ class AutoNavigator:
             rospy.logwarn('[auto_navigator] clear_costmaps 失败: %s', e)
 
         # 锥桶已消失，依次通过各检查点
-        self.send_goal(*self.wp['leave_level_1'])                # (7.5,-2.5) 锥桶原位
-        self.send_goal(8.5, -3.0, 0.0, early_stop_dist=0.5)    # 穿越点
-        self.send_goal(*self.wp['start_slope'])                  # 坡道起点
+        self.send_goal(*self.wp['leave_level_1'])   # (8.0,-3.0) 锥桶后方
+        self.send_goal(*self.wp['start_slope'])     # 坡道起点
 
         # ── 阶段2: 爬坡（move_base 规划） ────────────────────────────
         rospy.loginfo('[auto_navigator] ===== 阶段2: 爬坡 =====')
