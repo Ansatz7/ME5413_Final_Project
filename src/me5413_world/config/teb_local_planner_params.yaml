@@ -15,7 +15,7 @@ TebLocalPlannerROS:
   publish_feedback: false
 
   # 机器人配置（Jackal）
-  max_vel_x: 0.5
+  max_vel_x: 0.6
   max_vel_x_backwards: 0.2
   max_vel_y: 0.0            # 差速驱动无横向速度
   max_vel_theta: 1.0

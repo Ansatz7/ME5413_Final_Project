@@ -74,10 +74,10 @@ class AutoNavigator:
 
         # 走廊巡航点（x=32 列）
         self.corridor_points = [
-            (32.0, 14.6, math.pi),
-            (32.0,  9.5, math.pi),
-            (32.0,  4.5, math.pi),
-            (32.0,  0.0, math.pi),
+            (32.0, 14.6, -math.pi/2),
+            (32.0,  9.5, -math.pi/2),
+            (32.0,  4.5, -math.pi/2),
+            (32.0,  0.0, -math.pi/2),
         ]
         # 最终停靠点（x=26 列，由箱子计数结果决定，暂用最后一个）
         self.end_points = [
@@ -245,7 +245,7 @@ class AutoNavigator:
         rospy.loginfo('[auto_navigator] ===== 阶段1: 离开一楼 =====')
         rospy.logwarn('[auto_navigator] 发布 /cmd_unblock（10s窗口开始）...')
         self.unblock_pub.publish(Bool(data=True))
-        rospy.sleep(0.5)  # 等 Gazebo 删锥桶
+        rospy.sleep(0.3)  # 等 Gazebo 删锥桶
 
         rospy.loginfo('[auto_navigator] 清空 costmap 残留...')
         try:

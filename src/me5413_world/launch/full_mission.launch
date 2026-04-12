@@ -39,6 +39,11 @@
     <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
     <rosparam file="$(find jackal_navigation)/params/map_nav_params/local_costmap_params.yaml"  command="load"/>
     <rosparam file="$(find jackal_navigation)/params/map_nav_params/global_costmap_params.yaml" command="load"/>
+    <!-- local costmap 需要显式声明 plugins，否则 obstacles_layer 不会被激活 -->
+    <rosparam param="local_costmap/plugins">
+      [{name: obstacles_layer, type: "costmap_2d::ObstacleLayer"},
+       {name: inflater_layer,  type: "costmap_2d::InflationLayer"}]
+    </rosparam>
     <param name="global_costmap/origin_x"          value="-5.0"/>
     <param name="global_costmap/origin_y"          value="-8.0"/>
     <param name="global_costmap/width"             value="75.0"/>
