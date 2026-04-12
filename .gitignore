@@ -58,7 +58,7 @@ CATKIN_IGNORE
 # Large files (shared via other means)
 *.bag
 *.pcd
-*.pt
+# *.pt — model weights are committed directly (box_detector.pt ~6 MB, yolov8n/yolo26n ~12 MB total)
 
 # YOLO training dataset (large, generated locally)
 src/me5413_dataset/
