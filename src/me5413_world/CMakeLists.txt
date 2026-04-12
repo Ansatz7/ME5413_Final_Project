@@ -51,5 +51,6 @@ catkin_install_python(PROGRAMS
   src/level1_patrol.py
   src/patrol_node.py
   src/auto_navigator.py
+  src/level1_quick_nav.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
