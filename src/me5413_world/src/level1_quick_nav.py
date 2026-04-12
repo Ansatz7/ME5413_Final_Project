@@ -18,7 +18,6 @@ import tf2_ros
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from geometry_msgs.msg import Quaternion
 from std_msgs.msg import Bool, Int16
-from std_srvs.srv import Empty
 
 ARRIVAL_DIST  = 0.4   # m，距目标此距离内视为到达
 GOAL_TIMEOUT  = 90.0  # 单点超时
@@ -46,8 +45,6 @@ class QuickNav:
 
         self.pub_respawn = rospy.Publisher(
             '/rviz_panel/respawn_objects', Int16, queue_size=1, latch=True)
-        self.pub_unblock = rospy.Publisher(
-            '/cmd_unblock', Bool, queue_size=1, latch=True)
         self.pub_done = rospy.Publisher(
             '/me5413/level1_done', Bool, queue_size=1, latch=True)
 
@@ -105,23 +102,12 @@ class QuickNav:
             rospy.sleep(6.0)
             rospy.loginfo('[quick_nav] 箱子完成')
 
-        # 两步到交接点
+        # 到交接点
         # self._go(3.5, 1.0,  90, '入口')
         self._go(7.5, -1.5, -90, 'leave_level_1')
 
-        # 到达后发 unblock，等 Gazebo 删锥桶，再清 costmap 残留
-        rospy.loginfo('[quick_nav] 发布 /cmd_unblock（开坡道10s）')
-        self.pub_unblock.publish(Bool(data=True))
-        rospy.sleep(0.8)   # 等 Gazebo 处理完删除
-
-        rospy.loginfo('[quick_nav] 清空 costmap 残留...')
-        try:
-            rospy.wait_for_service('/move_base/clear_costmaps', timeout=3.0)
-            rospy.ServiceProxy('/move_base/clear_costmaps', Empty)()
-            rospy.loginfo('[quick_nav] costmap 已清空')
-        except Exception as e:
-            rospy.logwarn('[quick_nav] clear_costmaps 失败: %s', e)
-
+        # 只发 level1_done，/cmd_unblock 由 auto_navigator 负责
+        # （auto_navigator 会在紧邻锥桶时再发，确保10s内通过）
         rospy.loginfo('[quick_nav] 发布 /me5413/level1_done')
         self.pub_done.publish(Bool(data=True))
 

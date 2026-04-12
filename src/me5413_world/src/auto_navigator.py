@@ -141,12 +141,14 @@ class AutoNavigator:
             return
 
         # ── 阶段1: 前往交接点 + 开坡道 ───────────────────────────────
+        # 锥桶位于 map(7.5, -2.5)，机器人从 level1_patrol 末端 ~(7.5,-1.5) 出发
+        # 先到达紧邻锥桶的位置，再发 /cmd_unblock，然后立刻穿过，确保10s内通过
         rospy.loginfo('[auto_navigator] ===== 阶段1: 离开一楼 =====')
-        self.send_goal(*self.wp['leave_level_1'])
+        self.send_goal(*self.wp['leave_level_1'])  # 到 (7.5,-2.0)，紧邻锥桶
 
-        rospy.logwarn('[auto_navigator] 发布 /cmd_unblock，移除路障...')
+        rospy.logwarn('[auto_navigator] 发布 /cmd_unblock，移除路障（10s窗口开始）...')
         self.unblock_pub.publish(Bool(data=True))
-        rospy.sleep(0.8)  # 等 Gazebo 删锥桶
+        rospy.sleep(0.5)  # 等 Gazebo 删锥桶
 
         rospy.loginfo('[auto_navigator] 清空 costmap 残留...')
         try:
@@ -156,7 +158,9 @@ class AutoNavigator:
         except Exception as e:
             rospy.logwarn('[auto_navigator] clear_costmaps 失败: %s', e)
 
-        self.send_goal(*self.wp['start_slope'])
+        # 立刻穿过锥桶原位（7.5,-2.5），用小 early_stop 确保快速通过
+        self.send_goal(8.5, -3.0, 0.0, early_stop_dist=0.5)   # 穿越点：锥桶正后方
+        self.send_goal(*self.wp['start_slope'])                  # 坡道起点
 
         # ── 阶段2: 爬坡 ──────────────────────────────────────────────
         rospy.loginfo('[auto_navigator] ===== 阶段2: 坡道 =====')
