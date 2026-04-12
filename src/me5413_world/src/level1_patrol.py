@@ -188,9 +188,7 @@ class Level1Patrol:
         # 立刻发布 Marker，不需要等定位收敛（方便在 RViz 里对比墙角）
         self.pub_markers.publish(build_waypoint_markers())
         rospy.loginfo('[level1_patrol] 巡逻点已发布到 /patrol_waypoints（RViz 添加 MarkerArray 可见）')
-        rospy.loginfo('[level1_patrol] 等待定位收敛（8s）...')
-        rospy.sleep(8.0)
-        rospy.loginfo('[level1_patrol] 开始导航')
+        rospy.loginfo('[level1_patrol] move_base 就绪，等待 run() 启动')
 
     # ── 箱子重生成 ────────────────────────────────────────────────────
 
@@ -282,7 +280,14 @@ class Level1Patrol:
         rospy.loginfo('[level1_patrol] ===== 一楼巡逻开始 =====')
 
         if RESPAWN_BOXES:
+            # 重生成箱子（8s）与定位收敛（8s）并行
+            rospy.loginfo('[level1_patrol] 重生成箱子 + 等待定位收敛（并行）...')
             self._respawn_boxes()
+            rospy.loginfo('[level1_patrol] 箱子完成，定位已收敛，开始导航')
+        else:
+            rospy.loginfo('[level1_patrol] 等待定位收敛 (8s)...')
+            rospy.sleep(8.0)
+            rospy.loginfo('[level1_patrol] 开始导航')
 
         total   = len(PATROL_WAYPOINTS)
         success = 0

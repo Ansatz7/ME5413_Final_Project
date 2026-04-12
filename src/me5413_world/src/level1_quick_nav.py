@@ -54,8 +54,7 @@ class QuickNav:
         self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
         rospy.loginfo('[quick_nav] 等待 move_base...')
         self.client.wait_for_server()
-        rospy.loginfo('[quick_nav] 就绪，等待定位收敛 (8s)...')
-        rospy.sleep(8.0)
+        rospy.loginfo('[quick_nav] move_base 就绪')
 
     def _robot_xy(self):
         try:
@@ -95,12 +94,16 @@ class QuickNav:
 
     def run(self):
         if RESPAWN_BOXES:
-            rospy.loginfo('[quick_nav] 重生成箱子...')
+            # 重生成箱子（8s）与定位收敛（8s）并行，节省等待时间
+            rospy.loginfo('[quick_nav] 重生成箱子 + 等待定位收敛（并行）...')
             self.pub_respawn.publish(Int16(data=0))
             rospy.sleep(2.0)
             self.pub_respawn.publish(Int16(data=1))
             rospy.sleep(6.0)
-            rospy.loginfo('[quick_nav] 箱子完成')
+            rospy.loginfo('[quick_nav] 箱子完成，定位已收敛')
+        else:
+            rospy.loginfo('[quick_nav] 等待定位收敛 (8s)...')
+            rospy.sleep(8.0)
 
         # 到交接点
         # self._go(3.5, 1.0,  90, '入口')
