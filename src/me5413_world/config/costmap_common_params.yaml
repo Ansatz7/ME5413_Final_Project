@@ -21,8 +21,8 @@ obstacles_layer:
     clearing: true
     min_obstacle_height: -100.0
     max_obstacle_height: 100.0
-    obstacle_range: 2.0
-    raytrace_range: 3.0
+    obstacle_range: 1.0
+    raytrace_range: 1.5
 
 inflater_layer:
   inflation_radius: 0.20

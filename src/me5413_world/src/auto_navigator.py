@@ -261,6 +261,12 @@ class AutoNavigator:
 
         # ── 阶段2: 爬坡（move_base 规划） ────────────────────────────
         rospy.loginfo('[auto_navigator] ===== 阶段2: 爬坡 =====')
+        try:
+            rospy.wait_for_service('/move_base/clear_costmaps', timeout=3.0)
+            rospy.ServiceProxy('/move_base/clear_costmaps', Empty)()
+            rospy.loginfo('[auto_navigator] 爬坡前清空 costmap')
+        except Exception as e:
+            rospy.logwarn('[auto_navigator] clear_costmaps 失败: %s', e)
         self.send_goal(*self.wp['slope1'],  early_stop_dist=1.0, timeout=120.0)
         self.send_goal(*self.wp['slope2'],  early_stop_dist=1.0, timeout=60.0)
         self.send_goal(*self.wp['slope3'],  early_stop_dist=1.0, timeout=60.0)
