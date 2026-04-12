@@ -534,6 +534,14 @@ Visualization Manager:
             {}
           Queue Size: 10
           Value: true
+        - Class: rviz/MarkerArray
+          Enabled: true
+          Marker Topic: /auto_waypoints
+          Name: Auto Waypoints
+          Namespaces:
+            {}
+          Queue Size: 10
+          Value: true
       Enabled: true
       Name: Planning
     - Class: rviz/Group
