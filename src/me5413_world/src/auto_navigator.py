@@ -26,6 +26,7 @@ import tf
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from actionlib_msgs.msg import GoalStatus
 from std_msgs.msg import Bool
+from std_srvs.srv import Empty
 
 
 class AutoNavigator:
@@ -145,7 +146,15 @@ class AutoNavigator:
 
         rospy.logwarn('[auto_navigator] 发布 /cmd_unblock，移除路障...')
         self.unblock_pub.publish(Bool(data=True))
-        rospy.sleep(1.0)
+        rospy.sleep(0.8)  # 等 Gazebo 删锥桶
+
+        rospy.loginfo('[auto_navigator] 清空 costmap 残留...')
+        try:
+            rospy.wait_for_service('/move_base/clear_costmaps', timeout=3.0)
+            rospy.ServiceProxy('/move_base/clear_costmaps', Empty)()
+            rospy.loginfo('[auto_navigator] costmap 已清空')
+        except Exception as e:
+            rospy.logwarn('[auto_navigator] clear_costmaps 失败: %s', e)
 
         self.send_goal(*self.wp['start_slope'])
 
