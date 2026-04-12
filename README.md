@@ -149,6 +149,11 @@ cp -r ~/gazebo_models/* ~/.gazebo/models/
 cp -r ~/ME5413_Final_Project/src/me5413_world/models/* ~/.gazebo/models/
 ```
 
+> **YOLOv8 model weights** are included in the repository and require no separate download:
+> - `src/me5413_world/models/box_detector.pt` — custom-trained digit detector (~6 MB)
+> - `src/me5413_world/models/pretrained/yolov8n.pt` — YOLOv8n base weights (~6 MB)
+> - `src/me5413_world/models/pretrained/yolo26n.pt` — alternative base weights (~5 MB)
+
 > **Tip**: Add `source ~/ME5413_Final_Project/devel/setup.bash` to your `~/.bashrc` so you don't need to source it every terminal session.
 
 ---
