@@ -1,11 +1,10 @@
 <launch>
 
   <!-- ══════════════════════════════════════════════════════════════
-       level1_quick_check.launch — 快速跑到交接点 → 测试二楼导航
+       level2_quick_check.launch — 传送到二楼，直接测试出口选择+走廊扫描+冲入房间
        前提：先启动 world.launch
        流程：
-         入口 → leave_level_1（2点导航）→ 自动发 /cmd_unblock + /me5413/level1_done
-         → auto_navigator 接手二楼
+         传送到 level_2_2 (map 37.0,7.3) → auto_navigator 从阶段4开始
   ═══════════════════════════════════════════════════════════════ -->
 
   <arg name="map_file" default="$(find me5413_world)/maps/me5413_2d_map.yaml"/>
@@ -33,7 +32,6 @@
     <rosparam file="$(find me5413_world)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
     <rosparam file="$(find jackal_navigation)/params/map_nav_params/local_costmap_params.yaml"  command="load"/>
     <rosparam file="$(find jackal_navigation)/params/map_nav_params/global_costmap_params.yaml" command="load"/>
-    <!-- local costmap 需要显式声明 plugins，否则 obstacles_layer 不会被激活 -->
     <rosparam param="local_costmap/plugins">
       [{name: obstacles_layer, type: "costmap_2d::ObstacleLayer"},
        {name: inflater_layer,  type: "costmap_2d::InflationLayer"}]
@@ -56,7 +54,7 @@
     <remap from="odom" to="odometry/filtered"/>
   </node>
 
-  <!-- box_counter：在二楼走廊扫描时检测展示箱数字 -->
+  <!-- box_counter -->
   <node name="box_counter_node" pkg="me5413_world" type="box_counter.py" output="screen"
         launch-prefix="taskset -c 8,9,10,11">
     <param name="use_ground_truth"  value="false"/>
@@ -74,10 +72,10 @@
     <param name="show_gt"           value="true"/>
   </node>
 
-  <!-- 快速导航到交接点，然后自动触发二楼 -->
-  <node name="level1_quick_nav" pkg="me5413_world" type="level1_quick_nav.py" output="screen"/>
+  <!-- 传送到二楼，触发 /me5413/level2_start -->
+  <node name="level2_quick_nav" pkg="me5413_world" type="level2_quick_nav.py" output="screen"/>
 
-  <!-- 二楼导航状态机（等待 /me5413/level1_done） -->
+  <!-- 二楼导航状态机 -->
   <node name="auto_navigator" pkg="me5413_world" type="auto_navigator.py" output="screen"/>
 
   <!-- RViz -->

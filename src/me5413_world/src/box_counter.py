@@ -117,11 +117,13 @@ class BoxCounter:
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
-        self.pub_count   = rospy.Publisher('/me5413/box_count',    String,      queue_size=1)
-        self.pub_markers = rospy.Publisher('/me5413/box_markers',  MarkerArray, queue_size=1)
-        self.pub_done    = rospy.Publisher('/me5413/scan_done',    Bool,        queue_size=1)
-        self.pub_debug   = rospy.Publisher('/me5413/debug_image',  Image,       queue_size=1)
-        self.pub_gt      = rospy.Publisher('/me5413/gt_box_markers', MarkerArray, queue_size=1)
+        self.pub_count    = rospy.Publisher('/me5413/box_count',    String,      queue_size=1)
+        self.pub_markers  = rospy.Publisher('/me5413/box_markers',  MarkerArray, queue_size=1)
+        self.pub_done     = rospy.Publisher('/me5413/scan_done',    Bool,        queue_size=1)
+        self.pub_debug    = rospy.Publisher('/me5413/debug_image',  Image,       queue_size=1)
+        self.pub_gt       = rospy.Publisher('/me5413/gt_box_markers', MarkerArray, queue_size=1)
+        # 当前帧 YOLO 原始识别结果（不经过 cluster/dedup），供二楼走廊扫描使用
+        self.pub_yolo_raw = rospy.Publisher('/me5413/yolo_raw',    String,      queue_size=1)
         self.save_debug  = rospy.get_param('~save_debug', False)
         self.debug_dir   = rospy.get_param('~debug_dir',  '/tmp/me5413_debug')
         self._frame_idx  = 0
@@ -445,7 +447,11 @@ class BoxCounter:
             status = self._get_display_status(wx, wy, digit)
             annotations.append((bbox, digit, conf, dist, status, (wx, wy)))
 
-        self._publish_debug_image(cv_img, annotations)
+        # 当前帧 YOLO 原始数字（不经过 cluster/dedup）
+        raw_digits = [d[0] for d in detections]
+        self.pub_yolo_raw.publish(String(data=json.dumps(raw_digits)))
+
+        self._publish_debug_image(cv_img, annotations, raw_digits)
 
     def _add_observation(self, digit, wx, wy, robot_pos):
         """
@@ -673,7 +679,7 @@ class BoxCounter:
 
     # ── 调试图 ───────────────────────────────────────────
 
-    def _publish_debug_image(self, cv_img, annotations):
+    def _publish_debug_image(self, cv_img, annotations, raw_digits=None):
         if self.pub_debug.get_num_connections() == 0 and not self.save_debug:
             return
 
@@ -702,9 +708,16 @@ class BoxCounter:
                 cv2.putText(vis, ps, (x0, max(y0+14, 26)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1, cv2.LINE_AA)
 
+        # 第一行：累计计数
         summary = 'Count: ' + json.dumps(self.counter, sort_keys=True)
         cv2.putText(vis, summary, (6, 18),  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
         cv2.putText(vis, summary, (5, 17),  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0),       1, cv2.LINE_AA)
+
+        # 第二行：当前帧 YOLO 原始识别数字（raw_digits 由 _display_cb 传入）
+        if raw_digits is not None:
+            raw_line = 'YOLO: ' + (str(raw_digits) if raw_digits else '(none)')
+            cv2.putText(vis, raw_line, (6, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+            cv2.putText(vis, raw_line, (5, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,200,255),   1, cv2.LINE_AA)
 
         try:
             self.pub_debug.publish(self.bridge.cv2_to_imgmsg(vis, encoding='bgr8'))

@@ -11,17 +11,22 @@ level1_quick_nav.py — 快速跑到交接点，触发二楼测试
 用途：隔离测试 auto_navigator.py 二楼流程，跳过完整一楼巡逻
 """
 
+import json
 import math
 import rospy
 import actionlib
 import tf2_ros
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from geometry_msgs.msg import Quaternion
-from std_msgs.msg import Bool, Int16
+from std_msgs.msg import Bool, Int16, String
 
 ARRIVAL_DIST  = 0.4   # m，距目标此距离内视为到达
 GOAL_TIMEOUT  = 90.0  # 单点超时
 RESPAWN_BOXES = True  # 是否重生成箱子
+
+# 模拟一楼计数结果：digit → count，最小的那个即为目标房间
+# 修改这里来测试不同的目标数字
+FAKE_BOX_COUNT = {"1":1, "2":2, "3":3, "4":4, "5":5, "6":6, "7":7, "8":8, "9":9}
 
 
 def yaw_to_quat(yaw_deg):
@@ -43,10 +48,12 @@ class QuickNav:
     def __init__(self):
         rospy.init_node('level1_quick_nav')
 
-        self.pub_respawn = rospy.Publisher(
-            '/rviz_panel/respawn_objects', Int16, queue_size=1, latch=True)
-        self.pub_done = rospy.Publisher(
-            '/me5413/level1_done', Bool, queue_size=1, latch=True)
+        self.pub_respawn   = rospy.Publisher(
+            '/rviz_panel/respawn_objects', Int16,   queue_size=1, latch=True)
+        self.pub_done      = rospy.Publisher(
+            '/me5413/level1_done',         Bool,    queue_size=1, latch=True)
+        self.pub_box_count = rospy.Publisher(
+            '/me5413/box_count',           String,  queue_size=1, latch=True)
 
         self._tf_buf = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buf)
@@ -109,8 +116,15 @@ class QuickNav:
         # self._go(3.5, 1.0,  90, '入口')
         self._go(7.5, -1.8, -90, 'leave_level_1')
 
+        # 发布模拟计数结果（测试用）：auto_navigator 收到后会拍快照算目标数字
+        fake_count_str = json.dumps(FAKE_BOX_COUNT)
+        rospy.loginfo('[quick_nav] 发布模拟计数 %s（目标: %s）',
+                      fake_count_str,
+                      min(FAKE_BOX_COUNT, key=FAKE_BOX_COUNT.get))
+        self.pub_box_count.publish(String(data=fake_count_str))
+        rospy.sleep(0.1)  # 确保 auto_navigator 收到后再触发 level1_done
+
         # 只发 level1_done，/cmd_unblock 由 auto_navigator 负责
-        # （auto_navigator 会在紧邻锥桶时再发，确保10s内通过）
         rospy.loginfo('[quick_nav] 发布 /me5413/level1_done')
         self.pub_done.publish(Bool(data=True))
 
