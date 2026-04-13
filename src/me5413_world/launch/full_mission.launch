@@ -77,8 +77,7 @@
     <param name="dedup_any_digit"   value="0.4"/>
     <param name="min_bbox_pts"      value="1"/>
     <param name="save_debug"        value="false"/>
-  <!-- GT参考：红色marker显示箱子真实位置，调试用，完成后改为false -->
-    <param name="show_gt"           value="true"/>
+    <param name="show_gt"           value="false"/>
   </node>
 
   <!-- 一楼巡逻状态机 -->
